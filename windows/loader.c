@@ -322,17 +322,6 @@ static LONG WINAPI on_exception(EXCEPTION_POINTERS *ep) {
                 fprintf(stderr, "albw:    seh[%d] %p -> next %p handler %s%s\n", k, (void *)r, r[0], w,
                         ((uint8_t *)r < (uint8_t *)tib->StackLimit || (uint8_t *)r + 8 > (uint8_t *)tib->StackBase) ? "  OUTSIDE STACK BOUNDS" : "");
             }
-            fprintf(stderr, "albw:    DeallocationStack %p guaranteed %lu\n", *(void **)((uint8_t *)tib + 0xE0C), *(unsigned long *)((uint8_t *)tib + 0xF78));
-            fflush(stderr);
-        }
-    }
-    if (0 && (code & 0xF0000000u) == 0xC0000000u && code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
-        code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW) {
-        static volatile LONG other;
-        if (InterlockedIncrement(&other) <= 10) {
-            char w[300];
-            where_is((uint32_t)(uintptr_t)ep->ExceptionRecord->ExceptionAddress, w, sizeof w);
-            fprintf(stderr, "albw: exception %#lx at %s, thread %lu\n", code, w, GetCurrentThreadId());
             fflush(stderr);
         }
     }
@@ -393,35 +382,53 @@ static int in_code(uint32_t a) {
         if (ph[i].type == 1 && (ph[i].flags & 1) && a >= ph[i].vaddr && a < ph[i].vaddr + ph[i].filesz) return 1;
     return 0;
 }
-static void dump_thread(DWORD id, int round) {
+/* One thread's state, copied while it is suspended. Nothing in here may take a lock another thread could
+   hold (no printf, no malloc, no module lookups): a suspended thread that holds the stderr, heap or
+   loader lock would block the watchdog, and the game would never be resumed. */
+#define SNAP_WORDS 4000
+typedef struct { DWORD id; uint32_t eip, esp; int n; uint32_t w[SNAP_WORDS]; } ThreadSnap;
+static int snap_thread(DWORD id, ThreadSnap *s) {
     HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, id);
-    if (!h) return;
-    if (SuspendThread(h) == (DWORD)-1) { CloseHandle(h); return; }
-    CONTEXT c;
-    memset(&c, 0, sizeof c);
-    c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
-    if (GetThreadContext(h, &c)) {
-        char w[300];
-        where_is(c.Eip, w, sizeof w);
-        char line[2600];
-        int k = snprintf(line, sizeof line, "albw: watchdog %d: thread %lu eip %s esp %#lx", round, id, w, c.Esp);
-        /* return addresses: words on the stack that point into the game's code, then into other modules */
-        uint32_t *sp = (uint32_t *)(uintptr_t)c.Esp;
-        int shown = 0;
-        for (int i = 0; i < 6000 && shown < 14 && k < (int)sizeof line - 340; i++) {
+    if (!h) return 0;
+    int ok = 0;
+    if (SuspendThread(h) != (DWORD)-1) {
+        CONTEXT c;
+        memset(&c, 0, sizeof c);
+        c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        if (GetThreadContext(h, &c)) {
+            s->id = id; s->eip = c.Eip; s->esp = c.Esp; s->n = 0;
             MEMORY_BASIC_INFORMATION mbi;
-            if (!VirtualQuery(sp + i, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) break;
-            uint32_t v = sp[i];
-            if (in_code(v)) {
-                where_is(v, w, sizeof w);
-                k += snprintf(line + k, sizeof line - (size_t)k, "\nalbw:     [esp+%#x] %s", i * 4, w);
-                shown++;
+            if (VirtualQuery((void *)(uintptr_t)c.Esp, &mbi, sizeof mbi) && mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) {
+                uintptr_t end = (uintptr_t)mbi.BaseAddress + mbi.RegionSize, bytes = end - c.Esp;
+                if (bytes > SNAP_WORDS * 4) bytes = SNAP_WORDS * 4;
+                memcpy(s->w, (void *)(uintptr_t)c.Esp, bytes & ~(uintptr_t)3);
+                s->n = (int)(bytes / 4);
             }
+            ok = 1;
         }
-        fprintf(stderr, "%s\n", line);
+        ResumeThread(h);
     }
-    ResumeThread(h);
     CloseHandle(h);
+    return ok;
+}
+static void print_snap(int round, const ThreadSnap *s) {   /* the thread is running again here */
+    char w[300], line[2600];
+    where_is(s->eip, w, sizeof w);
+    int k = snprintf(line, sizeof line, "albw: watchdog %d: thread %lu eip %s esp %#x", round, s->id, w, s->esp), shown = 0;
+    for (int i = 0; i < s->n && shown < 14 && k < (int)sizeof line - 340; i++)
+        if (in_code(s->w[i])) {   /* return addresses: words on the stack that point into the game's code */
+            where_is(s->w[i], w, sizeof w);
+            k += snprintf(line + k, sizeof line - (size_t)k, "\nalbw:     [esp+%#x] %s", i * 4, w);
+            shown++;
+        }
+    fprintf(stderr, "%s\n", line);
+}
+/* Windows marks a window "not responding" after 5 s without message handling: the signal that something is stuck */
+static BOOL CALLBACK hung_window_cb(HWND w, LPARAM p) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    if (pid == GetCurrentProcessId() && IsWindowVisible(w) && IsHungAppWindow(w)) *(int *)p = 1;
+    return TRUE;
 }
 static DWORD WINAPI watchdog_main(void *p) {
     (void)p;
@@ -431,20 +438,26 @@ static DWORD WINAPI watchdog_main(void *p) {
         Sleep((DWORD)secs[r] * 1000);
         t += secs[r];
         DWORD me = GetCurrentThreadId();
-        fprintf(stderr, "albw: watchdog %u: %d s after start-up, threads of the game:\n", r + 1, t);
-        {   /* who holds the C++ static-init guard lock (runtime/cxxabi.c)? LxMutex: SRW +0, owner +4, count +8, kind +12 */
+        int hung = 0;
+        EnumWindows(hung_window_cb, (LPARAM)&hung);
+        if (!hung) { fprintf(stderr, "albw: watchdog %u: %d s after start-up: the windows respond\n", r + 1, t); continue; }
+        fprintf(stderr, "albw: watchdog %u: %d s after start-up: a window is NOT RESPONDING; threads of the game:\n", r + 1, t);
+        {   /* who holds the C++ static-init guard lock (runtime/cxxabi.c)? LxMutex: state +0, owner +4, count +8, kind +12 */
             uint32_t ga = elf_symbol("guard_lock");
             if (ga) {
                 volatile uint32_t *m = (volatile uint32_t *)(uintptr_t)ga;
                 fprintf(stderr, "albw: watchdog %u: guard_lock owner thread %lu, count %d, kind %d, state %#x\n", r + 1, (unsigned long)m[1], (int)m[2], (int)m[3], (unsigned)m[0]);
-            } else fprintf(stderr, "albw: watchdog %u: no guard_lock symbol\n", r + 1);
+            }
         }
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
         if (snap == INVALID_HANDLE_VALUE) continue;
+        static ThreadSnap snaps[64];
+        int ns = 0;
         THREADENTRY32 te = {sizeof te};
-        for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te))
-            if (te.th32OwnerProcessID == GetCurrentProcessId() && te.th32ThreadID != me) dump_thread(te.th32ThreadID, (int)r + 1);
+        for (BOOL ok = Thread32First(snap, &te); ok && ns < 64; ok = Thread32Next(snap, &te))
+            if (te.th32OwnerProcessID == GetCurrentProcessId() && te.th32ThreadID != me && snap_thread(te.th32ThreadID, &snaps[ns])) ns++;
         CloseHandle(snap);
+        for (int i = 0; i < ns; i++) print_snap((int)r + 1, &snaps[i]);
         fflush(stderr);
     }
     return 0;
@@ -882,16 +895,12 @@ static uintptr_t run_on_stack(void *fn, void *arg, uint8_t *lo, uint8_t *hi) {
     SehRec *rec = (SehRec *)(((uintptr_t)hi - 32) & ~(uintptr_t)15);
     rec->next = (SehRec *)-1;
     rec->handler = final;
-    void **dealloc = (void **)((uint8_t *)tib + 0xE0C);   /* TEB.DeallocationStack (32-bit TEB), what SwitchToFiber also updates */
-    void *old_dealloc = *dealloc;
     tib->StackBase = hi;
     tib->StackLimit = lo;
-    *dealloc = lo;
     tib->ExceptionList = final ? (void *)rec : (void *)-1;
     uintptr_t r = stack_call(fn, arg, final ? (uint8_t *)rec : hi);
     tib->StackBase = old_base;
     tib->StackLimit = old_limit;
-    *dealloc = old_dealloc;
     tib->ExceptionList = old_seh;
     return r;
 }
@@ -1162,6 +1171,31 @@ static int system_gl_ok(char *what, size_t n) {
     FreeLibrary(gl);
     return ok;
 }
+/* Is there a real graphics adapter for Mesa's Direct3D 12 driver? (With one, Mesa's default is fine and fast: that
+   is what ALBW_SOFTWARE_GL=1 gives a PC whose OpenGL driver is missing or broken. Only Microsoft's own software
+   adapters - vendor 0x1414: WARP / Basic Render Driver - mean there is none.) */
+static int hardware_adapter(void) {
+    typedef struct { void **vtbl; } Obj;
+    HMODULE m = LoadLibraryA("dxgi.dll");
+    if (!m) return 0;
+    HRESULT (WINAPI *create)(const GUID *, void **) = (void *)GetProcAddress(m, "CreateDXGIFactory1");
+    static const GUID iid_factory1 = {0x770aae78, 0xf26f, 0x4dba, {0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}};
+    Obj *f = NULL;
+    int found = 0;
+    if (create && create(&iid_factory1, (void **)&f) == 0 && f) {
+        for (UINT i = 0; i < 16; i++) {
+            Obj *a = NULL;
+            /* IDXGIFactory1::EnumAdapters1 is vtable slot 12 */
+            if (((HRESULT(STDMETHODCALLTYPE *)(Obj *, UINT, Obj **))f->vtbl[12])(f, i, &a) != 0 || !a) break;
+            struct { WCHAR name[128]; UINT vendor, device, subsys, rev; SIZE_T vmem, smem, shared; LUID luid; UINT flags; } d;
+            /* IDXGIAdapter1::GetDesc1 is slot 10 */
+            if (((HRESULT(STDMETHODCALLTYPE *)(Obj *, void *))a->vtbl[10])(a, &d) == 0 && d.vendor != 0x1414 && !(d.flags & 2 /* SOFTWARE */)) found = 1;
+            ((ULONG(STDMETHODCALLTYPE *)(Obj *))a->vtbl[2])(a);   /* Release */
+        }
+        ((ULONG(STDMETHODCALLTYPE *)(Obj *))f->vtbl[2])(f);
+    }
+    return found;
+}
 static void choose_gl(void) {
     char mesa[MAX_PATH * 2], what[256] = "";
     snprintf(mesa, sizeof mesa, "%s/mesa/opengl32.dll", g_exe_dir);
@@ -1184,8 +1218,11 @@ static void choose_gl(void) {
            Microsoft's WARP, whose C++ exceptions (_com_error inside D3D12Core.dll) end the whole process
            here (observed in a Windows 10 VM without a GPU). softpipe is slow but works; llvmpipe gave "No
            matching GL pixel format" there. Under Wine Mesa already picks llvmpipe, so leave it alone. */
-        if (!getenv("GALLIUM_DRIVER") && !GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version"))
-            _putenv("GALLIUM_DRIVER=softpipe");
+        if (!getenv("GALLIUM_DRIVER") && !GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version")) {
+            int hw = hardware_adapter();
+            fprintf(stderr, "albw: Direct3D 12 hardware adapter: %s\n", hw ? "yes (Mesa keeps its default)" : "no (Mesa's softpipe is used)");
+            if (!hw) _putenv("GALLIUM_DRIVER=softpipe");
+        }
         /* its libgallium_wgl.dll sits next to it: Windows looks for a DLL's dependencies in the
            program's folder, not the DLL's, so add the mesa folder to the search path */
         char dir[MAX_PATH * 2];
@@ -1204,8 +1241,10 @@ static void pick_rom(void) {
     FILE *f = fopen(cfg, "r");
     if (f) { if (fgets(line, sizeof line, f)) line[strcspn(line, "\r\n")] = 0; fclose(f); }
     if (!*line || _access(line, 4)) {
-        /* no saved choice: a .3ds / .cci file next to ALBW.exe or in its roms folder is used (the first found) */
+        /* no saved choice: a .3ds / .cci file next to ALBW.exe or in its roms folder; the one with the size of the
+           real dump (748,580,864 bytes) first, else the first found */
         static const char *dirs[] = {"", "roms/"}, *pat[] = {"*.3ds", "*.cci"};
+        char first[MAX_PATH * 2] = "";
         for (int d = 0; d < 2 && !*line; d++)
             for (int k = 0; k < 2 && !*line; k++) {
                 char find[MAX_PATH * 2];
@@ -1213,9 +1252,16 @@ static void pick_rom(void) {
                 snprintf(find, sizeof find, "%s/%s%s", g_exe_dir, dirs[d], pat[k]);
                 HANDLE h = FindFirstFileA(find, &fd);
                 if (h == INVALID_HANDLE_VALUE) continue;
-                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) snprintf(line, sizeof line, "%s/%s%s", g_exe_dir, dirs[d], fd.cFileName);
+                do {
+                    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                    char path[MAX_PATH * 2];
+                    snprintf(path, sizeof path, "%s/%s%s", g_exe_dir, dirs[d], fd.cFileName);
+                    if (fd.nFileSizeHigh == 0 && fd.nFileSizeLow == 748580864u) { snprintf(line, sizeof line, "%s", path); break; }
+                    if (!*first) snprintf(first, sizeof first, "%s", path);
+                } while (FindNextFileA(h, &fd));
                 FindClose(h);
             }
+        if (!*line) snprintf(line, sizeof line, "%s", first);
         if (*line) fprintf(stderr, "albw: using the game file found next to ALBW.exe: %s\n", line);
     }
     if (!*line || _access(line, 4)) {
@@ -1282,7 +1328,8 @@ int main(int argc, char **argv) {
         /* the log goes next to ALBW.exe (easy to find and send); the user folder if that is not writable */
         char beside[MAX_PATH * 2];
         snprintf(beside, sizeof beside, "%s/albw.log", g_exe_dir);
-        if (freopen(beside, "w", stderr)) snprintf(log, sizeof log, "%s", beside);
+        FILE *probe = fopen(beside, "w");   /* a failed freopen would leave stderr closed */
+        if (probe) { fclose(probe); freopen(beside, "w", stderr); snprintf(log, sizeof log, "%s", beside); }
         else freopen(log, "w", stderr);
         setvbuf(stderr, NULL, _IONBF, 0);   /* a game that hangs never flushes: every line must reach the file at once */
         snprintf(g_log_path, sizeof g_log_path, "%s", log);

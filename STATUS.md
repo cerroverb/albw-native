@@ -79,8 +79,10 @@ and POSIX calls; SDL3.dll; a bundled Mesa OpenGL fallback. Details: [windows/REA
   - A boot watchdog logs every thread's position (game function or DLL+offset) at 4 / 8 / 16 / 32 / 62 / 122 s.
   - The log is `albw.log` next to `ALBW.exe`, unbuffered; a `.3ds` / `.cci` next to `ALBW.exe` or in
     `roms\` is used when no ROM path is saved.
-  - Without a GPU driver Mesa picks Direct3D 12 / WARP, whose C++ exceptions end the process; the
-    software fallback now uses softpipe (slow; llvmpipe gave "No matching GL pixel format" there).
+  - Without a GPU driver Mesa picks Direct3D 12 / WARP, whose C++ exceptions end the process; when DXGI
+    lists no real adapter (only Microsoft's WARP / Basic Render Driver, vendor 0x1414) the software
+    fallback uses softpipe (slow; llvmpipe gave "No matching GL pixel format" there). With a real adapter
+    Mesa keeps Direct3D 12 on the GPU (fast; the `--software-gl` workaround for broken OpenGL drivers).
   - Released as v0.2.11. Not confirmed on a real GPU yet. In the VM (softpipe) the game also died once after
     about 9 minutes: 0xc000041d (fatal user callback exception) on a thread running in unmapped memory;
     cause unknown (dump kept in the VM only). Open: the WARP crash itself (`_com_error` while the game runs on

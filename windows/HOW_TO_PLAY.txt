@@ -24,7 +24,7 @@ Esc opens the menu (controls, screen layout, save states, reset).
 If the window stays black or the game says OpenGL is missing: your PC has no OpenGL 3.3
 driver (common in virtual machines or over Remote Desktop). Install your graphics driver,
 or start ALBW.exe with the environment variable ALBW_SOFTWARE_GL=1 to use the bundled
-software renderer (mesa folder; very slow - it is only meant to get the game to start).
+software renderer (mesa folder; on a PC without a graphics card it is very slow, it is only meant to get the game to start).
 
 Trouble starting?
   - Unzipped from a download and SDL3.dll will not load: right-click the .zip > Properties >
