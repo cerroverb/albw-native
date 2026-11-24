@@ -699,6 +699,25 @@ static void menu_event(const SDL_Event *e) {
     }
 }
 
+static void menu_flush(int ww, int wh) {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, ww, wh);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(menu_prog);
+    glUniform4fv(menu_loc_size, 1, (float[4]){(float)ww, (float)wh, 0, 0});
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, menu_tex);
+    glBindVertexArray(menu_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(menu_nv * sizeof(MenuVtx)), menu_vtx);
+    glDrawArrays(GL_TRIANGLES, 0, menu_nv);
+    glBindVertexArray(0);
+    glDisable(GL_BLEND);
+}
+
 static void menu_draw(int ww, int wh) {
     MenuGeom g;
     menu_geom(ww, wh, &g);
@@ -748,22 +767,22 @@ static void menu_draw(int ww, int wh) {
         menu_text(g.dx + cw, y, hs, d->notes[k], 0.55f, 0.55f, 0.55f, 1);
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, ww, wh);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(menu_prog);
-    glUniform4fv(menu_loc_size, 1, (float[4]){(float)ww, (float)wh, 0, 0});
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, menu_tex);
-    glBindVertexArray(menu_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)(menu_nv * sizeof(MenuVtx)), menu_vtx);
-    glDrawArrays(GL_TRIANGLES, 0, menu_nv);
-    glBindVertexArray(0);
-    glDisable(GL_BLEND);
+    menu_flush(ww, wh);
+}
+
+/* single-screen mode at the title: the game's "Press A" prompt is on the bottom screen, which is not shown, so
+ * say it on the top screen (platform.c title_composite). (rx, ry, rw, rh) = the top screen in the window. */
+static void menu_title_hint(int ww, int wh, float rx, float ry, float rw, float rh) {
+    static const char *const txt = "Press A or Enter to start";
+    menu_gl_init();
+    float s = rw / (MENU_FONT_W * 44.0f);
+    if (s < 1.0f) s = 1.0f;
+    float w = (float)strlen(txt) * MENU_FONT_W * s, h = MENU_FONT_H * s;
+    float x = rx + (rw - w) * 0.5f, y = ry + rh * 0.80f;
+    menu_nv = 0;
+    menu_rect(x - 8 * s, y - 5 * s, w + 16 * s, h + 10 * s, 0.0f, 0.0f, 0.0f, 0.55f);
+    menu_text(x, y, s, txt, 1.0f, 0.85f, 0.45f, 1.0f);
+    menu_flush(ww, wh);
 }
 
 /* modal loop: the last game frame + the menu until it closes (game paused) */

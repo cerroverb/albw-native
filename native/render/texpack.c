@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "cityhash.h"
 #include "texpack.h"
 
@@ -14,6 +15,10 @@
 #define STBI_NO_HDR
 #include "stb_image.h"
 
+static double now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e3 + t.tv_nsec / 1e6; }
+/* ALBW_TEXPACK_LOG=1 also reports what the lookups cost (hash of the game's bytes, file read, PNG decode) */
+static double st_hash, st_read, st_dec, st_worst;
+static long st_n, st_hits, st_miss, st_seenmiss, st_bytes_hashed, st_bytes_png, st_bytes_rgba;
 static int g_init, g_on, g_flip = 1, g_log;
 static char g_dir[3][1500];   /* folders to look in, first match wins */
 static int g_ndir;
@@ -110,6 +115,10 @@ static uint8_t seen_get(uint64_t h) {
     }
 }
 static void seen_put(uint64_t h, uint8_t st) {
+    if (g_seen_cap >= ((size_t)1 << 20) && g_seen_n * 2 >= g_seen_cap) {   /* textures the game changes every frame make a new hash each time: start over rather than grow without end */
+        memset(g_seen, 0, g_seen_cap * sizeof *g_seen);
+        g_seen_n = 0;
+    }
     if (g_seen_n * 2 >= g_seen_cap) {
         size_t oc = g_seen_cap, nc = oc ? oc * 2 : 4096;
         __typeof__(g_seen) old = g_seen;
@@ -134,8 +143,11 @@ int texpack_active(void) {
 uint8_t *texpack_load(int fmt, int w, int h, const void *raw, size_t rawsize, int *ow, int *oh) {
     if (!g_init) init();
     if (!g_on) return NULL;
+    double t0 = g_log ? now_ms() : 0;
     uint64_t hash = city_hash64(raw, rawsize);
-    if (seen_get(hash) == 2) return NULL;
+    double t1 = g_log ? now_ms() : 0;
+    st_n++; st_hash += t1 - t0; st_bytes_hashed += (long)rawsize;
+    if (seen_get(hash) == 2) { st_seenmiss++; return NULL; }
     char path[1800];
     size_t n = 0;
     char *png = NULL;
@@ -143,11 +155,23 @@ uint8_t *texpack_load(int fmt, int w, int h, const void *raw, size_t rawsize, in
         snprintf(path, sizeof path, "%s/tex1_%dx%d_%016llX_%d_mip0.png", g_dir[i], w, h, (unsigned long long)hash, fmt);
         png = slurp(path, &n);
     }
+    double t2 = g_log ? now_ms() : 0;
+    st_read += t2 - t1;
     if (g_log) fprintf(stderr, "texpack: %dx%d fmt %d hash %016llX %s\n", w, h, fmt, (unsigned long long)hash, png ? "FOUND" : "none");
-    if (!png) { seen_put(hash, 2); return NULL; }
+    if (!png) { st_miss++; seen_put(hash, 2); return NULL; }
+    st_bytes_png += (long)n;
     int cw = 0, ch = 0, comp = 0;
     uint8_t *px = stbi_load_from_memory((const uint8_t *)png, (int)n, &cw, &ch, &comp, 4);
     free(png);
+    if (g_log) {
+        double t3 = now_ms(), cost = t3 - t0;
+        st_dec += t3 - t2; st_hits++; st_bytes_rgba += (long)cw * ch * 4;
+        if (cost > st_worst) st_worst = cost;
+        fprintf(stderr, "texpack: load %dx%d %.1f ms (hash %.1f, read %.1f, png decode %.1f); so far: %ld lookups, %ld files loaded, "
+                "%ld hash-only misses, %ld new misses; hash %.0f ms, read %.0f ms, decode %.0f ms, worst %.1f ms, png %ld KB, rgba %ld MB\n",
+                cw, ch, cost, t1 - t0, t2 - t1, t3 - t2, st_n, st_hits, st_seenmiss, st_miss, st_hash, st_read, st_dec, st_worst,
+                st_bytes_png >> 10, st_bytes_rgba >> 20);
+    }
     if (!px || cw < 1 || ch < 1) {
         fprintf(stderr, "texpack: cannot read %s: %s\n", path, stbi_failure_reason());
         if (px) stbi_image_free(px);
@@ -161,6 +185,24 @@ uint8_t *texpack_load(int fmt, int w, int h, const void *raw, size_t rawsize, in
         for (int y = 0; y < ch / 2; y++) {
             uint8_t *a = px + (size_t)y * cw * 4, *b = px + (size_t)(ch - 1 - y) * cw * 4;
             for (int x = 0; x < cw * 4; x++) { uint8_t t = a[x]; a[x] = b[x]; b[x] = t; }
+        }
+    }
+    {   /* ALBW_TEXPACK_MAX=<pixels>: shrink replacement textures whose width or height is above that by 2x box filters
+           (1024 / 2048 for GPUs with little memory: a 4K pack is about 1.9 GB of video memory at full size). Off by default. */
+        static long maxpx = -1;
+        if (maxpx < 0) { const char *e = getenv("ALBW_TEXPACK_MAX"); maxpx = e ? atol(e) : 0; }
+        while (maxpx >= 16 && (cw > maxpx || ch > maxpx) && cw >= 2 && ch >= 2) {
+            int nw = cw / 2, nh = ch / 2;
+            uint8_t *q = (uint8_t *)malloc((size_t)nw * nh * 4);
+            if (!q) break;
+            for (int y = 0; y < nh; y++)
+                for (int x = 0; x < nw; x++)
+                    for (int c = 0; c < 4; c++) {
+                        const uint8_t *r0 = px + ((size_t)(2 * y) * cw + 2 * x) * 4 + c, *r1 = r0 + (size_t)cw * 4;
+                        q[((size_t)y * nw + x) * 4 + c] = (uint8_t)((r0[0] + r0[4] + r1[0] + r1[4] + 2) / 4);
+                    }
+            free(px);
+            px = q; cw = nw; ch = nh;
         }
     }
     *ow = cw;

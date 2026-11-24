@@ -312,7 +312,7 @@ static char (*list_out)[64];
 static int list_n, list_max;
 static int list_cb(const char *path, const struct stat *st, int type, struct FTW *f) {
     (void)st;
-    if (f->level == 1 && type == FTW_D && list_n < list_max) snprintf(list_out[list_n++], 64, "%s", path + f->base);
+    if (f->level == 1 && (type == FTW_D || type == 5 /* FTW_DP: what the Windows loader's nftw reports for folders */) && list_n < list_max) snprintf(list_out[list_n++], 64, "%s", path + f->base);
     return 0;
 }
 int albw_list_subdirs(const char *dir, char (*names)[64], int max) {

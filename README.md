@@ -121,7 +121,8 @@ Replacement textures in the Citra / Azahar format work, for example
 `ALBW_TEXTURE_PACK=<folder>` at it. The folder is the one with the `tex1_..._mip0.png` files, or any folder above it
 (the pack zip's `user/load/textures/00040000000EC300`). The pack must use the new hash (`"use_new_hash": true` in its
 `pack.json`; the 4K pack does). `ALBW_TEXPACK_LOG=1` prints every lookup. A 4K pack needs a lot of video memory; the
-1080p version is much lighter. Textures drawn by the game at run time are not replaced (as in Citra). Stereoscopic 3D
+1080p version is much lighter. `ALBW_TEXPACK_MAX=2048` (or 1024) shrinks the replacement textures to that size for
+GPUs with little memory. Textures drawn by the game at run time are not replaced (as in Citra). Stereoscopic 3D
 (issue 1) is not part of this.
 
 ## Save sets (speed runs)

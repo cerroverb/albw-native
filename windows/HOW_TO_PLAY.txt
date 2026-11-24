@@ -40,6 +40,8 @@ Trouble starting?
     Install / update your graphics driver.
   - To force a mode, make a shortcut to ALBW.exe and add  --software-gl  (software renderer),
     --system-gl (graphics driver) or --console (show the log in a window) after its path.
+  - If antivirus software complains that ALBW.exe starts a copy of itself: that is how the game
+    reserves its memory reliably. Set the environment variable ALBW_NO_LAUNCHER=1 to skip it.
   - When something goes wrong: press Esc in the game > Help > "Copy log to clipboard", then paste
     it (Ctrl+V) into a new issue at github.com/spacestate1/albw-native/issues. If the game stops with
     an error, the log is already on the clipboard. The file is albw.log (see above).

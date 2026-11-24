@@ -235,8 +235,14 @@ static void launch_reserved(void) {
             ok = VirtualAllocEx(pi.hProcess, (void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS) != NULL;
         if (ok) {
             if (ResumeThread(pi.hThread) != (DWORD)-1) {
-                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-                ExitProcess(0);
+                CloseHandle(pi.hThread);
+                /* stay until the game ends and pass its exit code on, so a script, "start /wait" or another
+                   launcher sees the real run, not a process that ends at once */
+                DWORD code = 0;
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                GetExitCodeProcess(pi.hProcess, &code);
+                CloseHandle(pi.hProcess);
+                ExitProcess(code);
             }
         }
         /* the new process's own stack, heap or PEB took part of a range (placement is random): try again */

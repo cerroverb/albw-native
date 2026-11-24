@@ -707,6 +707,52 @@ static int at_title(void) {
  * screen comes back by itself once Link is in the field. */
 static int g_ss_front;
 
+/* Title in single-screen mode (BOOT_LOG: first press left a blank screen). The game's title shows "Press A" on the
+ * BOTTOM screen, which single-screen mode does not show, and a press made before that prompt was up (the boot, the
+ * logo) flipped to a black bottom screen. Now: while the prompt is up, the top screen carries the same text; a press
+ * at the title is passed to the game and the bottom screen comes up only once the file list is actually there. */
+static int g_title_prompt;     /* the bottom screen shows "Press A" */
+static long g_title_pending;   /* frame of the press that is waiting for the file list, 0 = none */
+static void menu_title_hint(int ww, int wh, float rx, float ry, float rw, float rh);
+static void plat_single_screen_flip(void);
+static __attribute__((noinline)) void title_composite(const Layout *l) {
+    extern long g_plat_frames;
+    if (!g_layout_cfg.single_screen || g_layout_cfg.show_bottom || g_ss_front || !at_title()) { g_title_prompt = 0; g_title_pending = 0; return; }
+    const Target *bt = &screens[SCREEN_BOTTOM];
+    int w = bt->w, h = bt->h;
+    static unsigned frame;
+    if (w > 0 && h > 0 && frame++ % 6 == 0) {
+        glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, bt->fbo);
+        uint8_t pa[4] = {0}, pb[4] = {0}, pc[4] = {0};
+        glReadPixels(160 * w / 320, h - 1 - 70 * h / 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pa);    /* file list: parchment */
+        glReadPixels(160 * w / 320, h - 1 - 130 * h / 240, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pb);
+        int rw = 60 * w / 320 > 0 ? 60 * w / 320 : 1, rh = 14 * h / 240 > 0 ? 14 * h / 240 : 1;
+        uint8_t *reg = (uint8_t *)malloc((size_t)rw * rh * 4);
+        int orange = 0;
+        if (reg) {   /* the orange "Press A" text, centre of the screen */
+            glReadPixels(130 * w / 320, h - 1 - 127 * h / 240, rw, rh, GL_RGBA, GL_UNSIGNED_BYTE, reg);
+            for (int k = 0; k < rw * rh; k++) if (reg[k * 4] > 190 && reg[k * 4 + 1] > 50 && reg[k * 4 + 1] < 150 && reg[k * 4 + 2] < 70) orange++;
+            free(reg);
+        }
+        (void)pc;
+        glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, 0);
+        int list = pa[0] > 150 && pa[1] > 120 && pa[2] < 130 && pb[0] > 150 && pb[1] > 120 && pb[2] < 130;
+        g_title_prompt = orange >= 8 && !list;
+        if (g_title_pending && list) {   /* the file list is up: show it */
+            g_title_pending = 0;
+            plat_single_screen_flip();
+            g_ss_front = 1;
+            return;
+        }
+        if (g_title_pending && g_plat_frames - g_title_pending > 900) {   /* 15 s and no list */
+            g_title_pending = 0;
+            if (!g_title_prompt) { plat_single_screen_flip(); g_ss_front = 1; return; }   /* prompt not recognised: do not leave the player stuck */
+        }
+    }
+    if (g_title_prompt && (!g_title_pending || g_plat_frames - g_title_pending > 180) && l->visible[SCREEN_TOP])
+        menu_title_hint(l->ww, l->wh, l->r[SCREEN_TOP].x, l->r[SCREEN_TOP].y, l->r[SCREEN_TOP].w, l->r[SCREEN_TOP].h);
+}
+
 static void plat_single_screen_set(int on) {
     g_layout_cfg.single_screen = on != 0;
     g_layout_cfg.show_bottom = 0;
@@ -1409,8 +1455,9 @@ int plat_poll(void) {
             fprintf(stderr, "selector: f=%ld press, player %s %.3f %.3f %.3f\n", g_plat_frames, pp ? "yes" : "no", pp ? pp[0] : 0, pp ? pp[1] : 0, pp ? pp[2] : 0);
         }
         if (at_title() && !g_layout_cfg.show_bottom && (pressed & (KEY_START | KEY_A))) {
-            plat_single_screen_flip();
-            g_ss_front = 1;
+            /* the bottom screen follows once the file list shows
+               (title_composite). Before that the press was the boot / logo's and used to leave a blank screen. */
+            g_title_pending = g_plat_frames ? g_plat_frames : 1;
         } else if (in_field && g_ss_front && g_plat_frames == field_frame) {
             plat_single_screen_flip();   /* clears g_ss_front */
         }
@@ -1520,6 +1567,35 @@ static void plat_composite(const Layout *l) {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
     sel_composite(l);   /* single-screen selector over the bottom screen (selector.c) */
+    title_composite(l); /* single-screen title: "Press A" on the top screen, file list switch */
+    {   /* debug: ALBW_WIN_SHOT=<frame>[,<frame>...] writes the composed window (both screens, selector, overlays) as
+           win_<frame>.ppm in ALBW_SHOT_DIR (default .): ALBW_SHOT only saves the two screen targets */
+        extern long g_plat_frames;
+        static const char *spec; static int init;
+        if (!init) { init = 1; spec = getenv("ALBW_WIN_SHOT"); }
+        if (spec) {
+            for (const char *q = spec; *q;) {
+                char *e; long f = strtol(q, &e, 10);
+                if (e == q) break;
+                if (f == g_plat_frames && l->ww > 0 && l->wh > 0) {
+                    const char *dir = getenv("ALBW_SHOT_DIR");
+                    char path[800]; snprintf(path, sizeof path, "%s/win_%ld.ppm", dir ? dir : ".", f);
+                    unsigned char *px = malloc((size_t)l->ww * l->wh * 4);
+                    FILE *fp = px ? fopen(path, "wb") : NULL;
+                    if (fp) {
+                        glBindFramebuffer(0x8CA8 /* GL_READ_FRAMEBUFFER */, 0);
+                        glReadPixels(0, 0, l->ww, l->wh, 0x1908, 0x1401, px);
+                        fprintf(fp, "P6\n%d %d\n255\n", l->ww, l->wh);
+                        for (int y = l->wh - 1; y >= 0; y--)
+                            for (int x = 0; x < l->ww; x++) fwrite(px + ((size_t)y * l->ww + x) * 4, 1, 3, fp);
+                        fclose(fp);
+                    }
+                    free(px);
+                }
+                q = *e ? e + 1 : e;
+            }
+        }
+    }
 }
 
 #include "menu.c"   /* Esc menu overlay (pauses the game inside plat_end_frame) */
