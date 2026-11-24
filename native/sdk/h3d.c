@@ -324,6 +324,17 @@ static void uniform_word(Dec *d, uint32_t v) {
 static H3dVtx *emit_vertex_layout(Dec *d);
 
 static uint32_t g_tp_addr[512]; static unsigned g_tp_n; /* ALBW_TEXPARAM_TRACE */
+static uint32_t g_dbg_desc[256]; static int g_dbg_ndesc;
+/* a new vertex layout is due when the formats were written, or (live eft ranges) only a buffer base / address: the
+ * primitive emitters (Fire / Tornado Rod flames) bind their mesh with 0x203.. alone and left the previous emitter's
+ * array bound (huge shards, BOOT_LOG) */
+static int layout_written(const Dec *d) {
+    if (d->written[0x201] || d->written[0x202]) return 1;
+    if (!d->live) return 0;
+    if (d->written[0x200]) return 1;
+    for (int r = 0x203; r <= 0x226; r++) if (d->written[r]) return 1;
+    return 0;
+}
 static void dec_write(Dec *d, uint32_t reg, uint32_t v, uint32_t mask) {
     { /* debug: ALBW_TEXPARAM_TRACE=1: where each texture-unit-0 parameter word lives in game memory */
         static int tt = -1;
@@ -355,6 +366,8 @@ static void dec_write(Dec *d, uint32_t reg, uint32_t v, uint32_t mask) {
     if (d->live) {
         if (reg == 0x2CB) { d->ncode = 0; d->code_new = 1; }
         else if (reg >= 0x2CC && reg <= 0x2D3) { if (d->ncode < 512) d->code[d->ncode++] = v; }
+        else if (reg == 0x2D5) g_dbg_ndesc = 0;                    /* operand descriptors (debug dump of unknown programs) */
+        else if (reg >= 0x2D6 && reg <= 0x2DD) { if (g_dbg_ndesc < 256) g_dbg_desc[g_dbg_ndesc++] = v; }
         else if (reg == 0x2B0 && d->eft_variant != -2) return;   /* b carries the eft variant */
         else if ((reg >= 0x200 && reg <= 0x226) || (reg >= 0x232 && reg <= 0x235) || reg == 0x2BB || reg == 0x2BC)
             d->vtx_done = 0;                                       /* a new layout before the next draw */
@@ -399,6 +412,16 @@ static void dec_write(Dec *d, uint32_t reg, uint32_t v, uint32_t mask) {
         /* draw-elements kick: index buffer 0x227 (offset from the attribute base, bit 31 = 16-bit
            indices), count 0x228, primitive 0x25E bits 8-9 */
         flush_uniforms(d);
+        {   /* debug: ALBW_EFT_LAYOUT_TRACE=1: the vertex state at every live draw kick (primitive emitters, BOOT_LOG) */
+            static int lt = -1;
+            if (lt < 0) lt = getenv("ALBW_EFT_LAYOUT_TRACE") != NULL;
+            if (lt && d->live) {
+                fprintf(stderr, "eft-layout: kick count %u idx %#x vtx_done %d layout_written %d written201/2 %d%d base %#x fmt %08x %08x buf0 %08x %08x %08x written203 %d map %08x %08x\n",
+                        (unsigned)d->reg[0x228], (unsigned)d->reg[0x227], d->vtx_done, layout_written(d), d->written[0x201], d->written[0x202],
+                        (unsigned)(d->reg[0x200] << 3), (unsigned)d->reg[0x201], (unsigned)d->reg[0x202], (unsigned)d->reg[0x203], (unsigned)d->reg[0x204],
+                        (unsigned)d->reg[0x205], d->written[0x203], (unsigned)d->reg[0x2BB], (unsigned)d->reg[0x2BC]);
+            }
+        }
         if (!d->vtx_done && (d->written[0x201] || d->written[0x202])) emit_vertex_layout(d);
         ROp op = op_new(ROP_EXT);
         op.u.ext.kind = H3D_DRAW;
@@ -730,6 +753,28 @@ static void live_take(Dec *d, LiveEnt **out, int *n, int *cap) {
 static unsigned g_live_ranges, g_live_draws, g_live_dropped, g_live_overflow;
 
 /* translate the command words [start, end) (game addresses) in place; returns the ops written */
+/* ALBW_EFT_DUMP=<dir>: a program no JackAll.ptcl entry matches (other PTCLs: the stripe / primitive emitters of the Fire and
+ * Tornado Rod, BOOT_LOG): its code words, operand descriptors and entry as <dir>/prog_<hash>.txt, once per hash */
+static void eft_dump_unknown(const uint32_t *code, int n, const uint32_t *desc, int nd, uint32_t entry) {
+    const char *dir = getenv("ALBW_EFT_DUMP");
+    uint32_t h = effects_program_hash(code, n);
+    static uint32_t seen[64]; static int ns;
+    for (int k = 0; k < ns; k++) if (seen[k] == h) return;
+    if (ns < 64) seen[ns++] = h;
+    fprintf(stderr, "eft: unknown program %08x (%d words, %d descriptors, entry %08x)%s\n", (unsigned)h, n, nd, (unsigned)entry, dir ? ", dumped" : "");
+    if (!dir) return;
+    char path[600];
+    snprintf(path, sizeof path, "%s/prog_%08x.txt", dir, (unsigned)h);
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "entry %08x\ncode", (unsigned)entry);
+    for (int k = 0; k < n; k++) fprintf(f, " %08x", (unsigned)code[k]);
+    fprintf(f, "\ndesc");
+    for (int k = 0; k < nd; k++) fprintf(f, " %08x", (unsigned)desc[k]);
+    fprintf(f, "\n");
+    fclose(f);
+}
+
 int h3d_translate_live(uint32_t start, uint32_t end) {
     if (!start || end <= start + 8 || end - start > (8u << 20)) return 0;
     uint32_t words = (end - start) / 4;
@@ -779,6 +824,7 @@ int h3d_translate_live(uint32_t start, uint32_t end) {
                 if (d->ncode && d->code_new) {
                     int var = effects_variant_of(effects_program_hash(d->code, d->ncode));
                     d->code_new = 0;
+                    if (var < 0) eft_dump_unknown(d->code, d->ncode, g_dbg_desc, g_dbg_ndesc, d->reg[0x2BA]);
                     d->eft_variant = var;
                     if (var >= 0) {
                         ROp pr = op_new(ROP_PROGRAM);
