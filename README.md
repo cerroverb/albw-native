@@ -113,6 +113,17 @@ everything – saves, save states, settings, screenshots, logs – is kept in it
 32-bit NVIDIA OpenGL library: Arch `lib32-nvidia-utils`, Ubuntu / Debian `libnvidia-gl-<version>:i386`).
 `ALBW_GPU=integrated` keeps the built-in GPU.
 
+## Texture packs
+
+Replacement textures in the Citra / Azahar format work, for example
+[Henriko Magnifico's 4K pack](https://www.henrikomagnifico.com/zelda-a-link-between-worlds-4k). Put the pack in
+`~/.local/share/albw-port/texture-pack/` (Windows: a `texture-pack` folder next to `ALBW.exe`), or point
+`ALBW_TEXTURE_PACK=<folder>` at it. The folder is the one with the `tex1_..._mip0.png` files, or any folder above it
+(the pack zip's `user/load/textures/00040000000EC300`). The pack must use the new hash (`"use_new_hash": true` in its
+`pack.json`; the 4K pack does). `ALBW_TEXPACK_LOG=1` prints every lookup. A 4K pack needs a lot of video memory; the
+1080p version is much lighter. Textures drawn by the game at run time are not replaced (as in Citra). Stereoscopic 3D
+(issue 1) is not part of this.
+
 ## Save sets (speed runs)
 
 Keep several sets of save files and switch between them in the game. Make a folder `save-sets` next

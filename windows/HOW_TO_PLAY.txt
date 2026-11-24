@@ -26,6 +26,13 @@ driver (common in virtual machines or over Remote Desktop). Install your graphic
 or start ALBW.exe with the environment variable ALBW_SOFTWARE_GL=1 to use the bundled
 software renderer (mesa folder; on a PC without a graphics card it is very slow, it is only meant to get the game to start).
 
+Texture packs (higher-resolution textures, e.g. Henriko Magnifico's "ALBW 4K"):
+  Unzip the pack and put its folder in a folder named "texture-pack" next to ALBW.exe, so that
+  texture-pack\...\pack.json exists (the "user\load\textures\00040000000EC300" folder of the pack
+  zip is found by itself). Packs in the Citra / Azahar format work; the pack must use the new hash
+  ("use_new_hash": true in its pack.json; this one does). albw.log says "texpack: replacement textures
+  from ..." when it is used. The 4K pack uses a lot of memory: try its 1080p version first.
+
 Trouble starting?
   - Unzipped from a download and SDL3.dll will not load: right-click the .zip > Properties >
     tick "Unblock" > OK, then unzip again.

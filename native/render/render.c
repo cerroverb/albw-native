@@ -34,6 +34,7 @@
 #include "effects.h"
 #include "prim.h"
 #include "texdecode.h"
+#include "texpack.h"
 
 /* ================================================================== GL functions beyond gl.h */
 
@@ -1054,6 +1055,28 @@ static void tex_upload(TexEnt *t) {
     glBindTexture(target, t->tex);
     int nfaces = t->cube ? 6 : 1;
     int levels = 0;
+    if (!t->cube && t->addr && texpack_active()) {
+        /* a replacement texture (texture pack, issues 1 and 4): found by the hash of the game's own bytes; its
+           mip levels are generated, as the packs ship level 0 only */
+        int cw = 0, ch = 0;
+        uint8_t *cp = texpack_load(t->fmt, t->w, t->h, (const void *)t->addr, texfmt_size(t->fmt, t->w, t->h), &cw, &ch);
+        if (cp) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, cw, ch, 0, GL_RGBA, GL_UNSIGNED_BYTE, cp);
+            free(cp);
+            int n = 0;
+            while (n < t->levels && (t->w >> n) >= 8 && (t->h >> n) >= 8) n++;
+            if (n < 1) n = 1;
+            static void (*genmip)(GLenum);
+            if (!genmip) genmip = (void (*)(GLenum))SDL_GL_GetProcAddress("glGenerateMipmap");
+            if (genmip && n > 1) genmip(GL_TEXTURE_2D);
+            glTexParameteri(target, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(target, GL_TEXTURE_MAX_LEVEL, n - 1);
+            t->up_levels = n;
+            t->dirty = false;
+            R.st.tex_uploads++;
+            return;
+        }
+    }
     for (int f = 0; f < nfaces; f++) {
         const uint8_t *src = (const uint8_t *)(t->cube ? t->faces[f] : t->addr);
         if (!src) continue;

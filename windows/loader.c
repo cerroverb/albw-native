@@ -1378,6 +1378,34 @@ static int take_options(int argc, char **argv) {
     return out;
 }
 
+/* the folder (at most `depth` levels down) that holds pack.json or tex1_*.png files; 0 if none */
+static int find_pack_dir(const char *dir, int depth, int *budget, char *out, size_t n) {
+    char pat[MAX_PATH * 2];
+    WIN32_FIND_DATAA fd;
+    snprintf(pat, sizeof pat, "%s/*", dir);
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    int found = 0;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && (!_stricmp(fd.cFileName, "pack.json") || !strncmp(fd.cFileName, "tex1_", 5))) {
+            snprintf(out, n, "%s", dir);
+            found = 1;
+        }
+    } while (!found && --*budget > 0 && FindNextFileA(h, &fd));
+    FindClose(h);
+    if (found || depth <= 0) return found;
+    h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.cFileName[0] != '.') {
+            char sub[MAX_PATH * 2];
+            snprintf(sub, sizeof sub, "%s/%s", dir, fd.cFileName);
+            found = find_pack_dir(sub, depth - 1, budget, out, n);
+        }
+    } while (!found && --*budget > 0 && FindNextFileA(h, &fd));
+    FindClose(h);
+    return found;
+}
 int main(int argc, char **argv) {
     argc = take_options(argc, argv);
     GetModuleFileNameA(NULL, g_exe_dir, sizeof g_exe_dir);
@@ -1390,6 +1418,22 @@ int main(int argc, char **argv) {
     if (getenv("ALBW_LAUNCHED")) { g_launched = 1; _putenv("ALBW_LAUNCHED="); }   /* not inherited by "Reset game" */
     else if (!getenv("ALBW_NO_LAUNCHER")) launch_reserved();
     reserve_fixed();
+
+    /* replacement textures (issues 1 and 4): a folder "texture-pack" next to ALBW.exe, unless ALBW_TEXTURE_PACK says
+       otherwise. A pack zip unpacks into folders inside folders: look for the one that holds pack.json (or the
+       tex1_ files), because the game itself cannot list folders */
+    if (!getenv("ALBW_TEXTURE_PACK")) {
+        static char tp[MAX_PATH + 24], found[MAX_PATH];
+        snprintf(tp, sizeof tp, "%s/texture-pack", g_exe_dir);
+        if (GetFileAttributesA(tp) != INVALID_FILE_ATTRIBUTES) {
+            int budget = 4000;
+            if (!find_pack_dir(tp, 6, &budget, found, sizeof found)) snprintf(found, sizeof found, "%s", tp);
+            static char env[MAX_PATH + 24];
+            snprintf(env, sizeof env, "ALBW_TEXTURE_PACK=%s", found);
+            slashes(env);
+            _putenv(env);
+        }
+    }
 
     /* HOME for the game's ~/.config and ~/.local/share paths */
     if (!getenv("HOME")) {
