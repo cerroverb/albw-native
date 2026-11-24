@@ -1061,7 +1061,7 @@ static void tex_upload(TexEnt *t) {
         int cw = 0, ch = 0;
         uint8_t *cp = texpack_load(t->fmt, t->w, t->h, (const void *)t->addr, texfmt_size(t->fmt, t->w, t->h), &cw, &ch);
         static GLint maxtex;
-        if (!maxtex) glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxtex);
+        if (!maxtex) glGetIntegerv(0x0D33 /* GL_MAX_TEXTURE_SIZE */, &maxtex);
         if (cp && (cw > maxtex || ch > maxtex)) {   /* a 4K pack's 8192-pixel textures on a GPU that stops at 4096: keep the original */
             static int warned;
             if (!warned++) fprintf(stderr, "texpack: %dx%d is larger than this GPU's texture limit (%d); using the game's own texture\n", cw, ch, (int)maxtex);
