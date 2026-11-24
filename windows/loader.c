@@ -214,9 +214,47 @@ static int unload_blockers(uintptr_t base, size_t size) {
     }
     return freed;
 }
+/* The reliable way to get the fixed ranges (issue 10): a DLL Windows loads on its own (apphelp.dll,
+   antivirus hooks) or a heap can land inside them before this program's first line runs, and a
+   system DLL keeps its address until the next reboot, so starting again does not always help.
+   Instead the first process starts a copy of itself suspended - only the exe and ntdll are mapped
+   then, no DLL has loaded - reserves the ranges inside that copy with VirtualAllocEx, and lets it
+   run. Windows places every later DLL around them. The copy knows it was started this way from
+   ALBW_LAUNCHED. If anything fails, this process carries on as before (reserve_fixed below). */
+static int g_launched;   /* this process was started by launch_reserved(): the ranges are already reserved */
+static void launch_reserved(void) {
+    char exe[MAX_PATH];
+    if (!GetModuleFileNameA(NULL, exe, sizeof exe)) return;
+    _putenv("ALBW_LAUNCHED=1");
+    for (int attempt = 0; attempt < 6; attempt++) {
+        STARTUPINFOA si = {sizeof si};
+        PROCESS_INFORMATION pi;
+        if (!CreateProcessA(exe, GetCommandLineA(), NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &si, &pi)) break;
+        int ok = 1;
+        for (size_t i = 0; i < sizeof g_fixed / sizeof *g_fixed && ok; i++)
+            ok = VirtualAllocEx(pi.hProcess, (void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS) != NULL;
+        if (ok) {
+            if (ResumeThread(pi.hThread) != (DWORD)-1) {
+                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                ExitProcess(0);
+            }
+        }
+        /* the new process's own stack, heap or PEB took part of a range (placement is random): try again */
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+    }
+    _putenv("ALBW_LAUNCHED=");
+}
+/* every range reserved by launch_reserved()? */
+static int already_reserved(uintptr_t base, size_t size) {
+    MEMORY_BASIC_INFORMATION mi;
+    return g_launched && VirtualQuery((void *)base, &mi, sizeof mi) && mi.State == MEM_RESERVE &&
+           (uintptr_t)mi.AllocationBase == base && mi.RegionSize >= size;
+}
 static void reserve_fixed(void) {
     for (size_t i = 0; i < sizeof g_fixed / sizeof *g_fixed; i++)
-        if (!VirtualAlloc((void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS) &&
+        if (!already_reserved(g_fixed[i].base, g_fixed[i].size) &&
+            !VirtualAlloc((void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS) &&
             !(unload_blockers(g_fixed[i].base, g_fixed[i].size) &&
               VirtualAlloc((void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS))) {
             DWORD err = GetLastError();
@@ -1232,6 +1270,12 @@ static int hardware_adapter(void) {
     }
     return found;
 }
+/* Laptops with an integrated and a discrete GPU: the NVIDIA and AMD drivers read these two exports from the
+   program's exe and run its OpenGL on the discrete GPU when they are 1 (NVIDIA "Optimus" and AMD "PowerXpress"
+   developer notes). Without them the system OpenGL can end up on the slow integrated chip. */
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+
 static void choose_gl(void) {
     char mesa[MAX_PATH * 2], what[256] = "";
     snprintf(mesa, sizeof mesa, "%s/mesa/opengl32.dll", g_exe_dir);
@@ -1342,7 +1386,10 @@ int main(int argc, char **argv) {
     if (sl) *sl = 0;
     snprintf(g_elf_path, sizeof g_elf_path, "%s/albw", g_exe_dir);
 
-    reserve_fixed();   /* first: before any DLL is loaded */
+    /* first: before any DLL is loaded */
+    if (getenv("ALBW_LAUNCHED")) { g_launched = 1; _putenv("ALBW_LAUNCHED="); }   /* not inherited by "Reset game" */
+    else if (!getenv("ALBW_NO_LAUNCHER")) launch_reserved();
+    reserve_fixed();
 
     /* HOME for the game's ~/.config and ~/.local/share paths */
     if (!getenv("HOME")) {
@@ -1388,6 +1435,7 @@ int main(int argc, char **argv) {
     if (g_gl_tls_ret >= 64 || g_gl_tls_esp >= 64) fatal("no TLS slots for the OpenGL thunks");
 
     fprintf(stderr, "albw: log started (%s)\n", g_log_path[0] ? g_log_path : "console");
+    fprintf(stderr, "albw: memory ranges: %s\n", g_launched ? "reserved by the launcher before any DLL loaded" : "reserved in this process (launcher unavailable)");
     if (g_unloaded[0]) fprintf(stderr, "albw: unloaded %s, it sat inside the memory the game needs\n", g_unloaded);
     fprintf(stderr, "albw: stage: choosing OpenGL\n");
     choose_gl();

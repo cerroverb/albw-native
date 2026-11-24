@@ -87,6 +87,15 @@ and POSIX calls; SDL3.dll; a bundled Mesa OpenGL fallback. Details: [windows/REA
     about 9 minutes: 0xc000041d (fatal user callback exception) on a thread running in unmapped memory;
     cause unknown (dump kept in the VM only). Open: the WARP crash itself (`_com_error` while the game runs on
     its own stacks, FAST_FAIL_INVALID_EXCEPTION_CHAIN); a faster software renderer for no-GPU PCs.
+  - After v0.2.11 (not released yet): issue 10 reported "cannot reserve memory ... apphelp.dll" on the first start
+    and success on the second (Windows loads apphelp.dll, the compatibility shim, into a program it has not seen;
+    a system DLL keeps its address until reboot, so the 12 relaunches did not help). Now `ALBW.exe` starts a copy of
+    itself suspended, reserves the fixed ranges in it with `VirtualAllocEx` (only ntdll is mapped then), and
+    resumes it (`launch_reserved`; log line "memory ranges: reserved by the launcher"); the old in-process path,
+    plus unloading `apphelp.dll`, stays as the fallback (`ALBW_NO_LAUNCHER=1` forces it). `NvOptimusEnablement` and
+    `AmdPowerXpressRequestHighPerformance` are exported so hybrid-GPU laptops run system OpenGL on the discrete GPU.
+    Checked in the VM only. Also reported on #10: black screen after confirming the name, then a crash (RTX 5070 Ti,
+    system OpenGL): no log yet.
 
 ## Open issues
 
