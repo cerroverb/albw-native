@@ -180,10 +180,11 @@ static void describe_blocker(uintptr_t base, size_t size, char *out, size_t n) {
         a = (uintptr_t)mi.BaseAddress + mi.RegionSize;
     }
 }
-/* A system DLL (typically apphelp.dll, Windows' compatibility shim, which Windows loads into a program it
-   has not seen before) can sit inside a range at an address that stays the same until the next reboot,
-   so starting again does not help. Such a DLL is not needed by this program: unload it (it is only used
-   to apply compatibility fixes) and report whether anything was freed. */
+/* Windows loads apphelp.dll (the compatibility shim) into a program it has not seen before. System DLLs
+   keep one address until the next reboot, so when it lands inside a range the game needs, starting
+   again does not help (issue 10: "In the way: 0x57f60000 ... apphelp.dll", fine on the second start).
+   This program needs no compatibility fixes, so that one DLL is unloaded. Only apphelp.dll is touched:
+   unloading an unknown DLL (antivirus hooks, overlays) could crash. Returns 1 if the DLL is gone. */
 static char g_unloaded[MAX_PATH];   /* logged once the log file is open */
 static int unload_blockers(uintptr_t base, size_t size) {
     MEMORY_BASIC_INFORMATION mi;
@@ -194,13 +195,18 @@ static int unload_blockers(uintptr_t base, size_t size) {
             HMODULE m = (HMODULE)mi.AllocationBase;
             char mod[MAX_PATH] = "";
             GetModuleFileNameA(m, mod, sizeof mod);
-            int n = 0;
-            while (n < 8 && FreeLibrary(m)) {   /* the load count may be above 1 */
-                n++;
-                MEMORY_BASIC_INFORMATION t;
-                if (!VirtualQuery(m, &t, sizeof t) || t.State == MEM_FREE) break;
+            const char *leaf = strrchr(mod, '\\');
+            if (leaf && !_stricmp(leaf + 1, "apphelp.dll")) {
+                for (int n = 0; n < 8; n++) {   /* the load count may be above 1 */
+                    if (!FreeLibrary(m)) break;
+                    MEMORY_BASIC_INFORMATION t;
+                    if (!VirtualQuery(m, &t, sizeof t) || t.State == MEM_FREE || t.AllocationBase != m) {
+                        snprintf(g_unloaded, sizeof g_unloaded, "%s", mod);
+                        freed = 1;
+                        break;
+                    }
+                }
             }
-            if (n) { snprintf(g_unloaded, sizeof g_unloaded, "%s", mod); freed = 1; }
             a = (uintptr_t)m + 0x1000;
             continue;
         }
