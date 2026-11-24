@@ -32,7 +32,7 @@
 
 const char RENDER_VS_EFT[] =
     "#version 330 core\n"
-    "layout(location = 0) in vec4 v0;\n"
+    "layout(location = 0) in vec4 v0; layout(location = 1) in vec4 v1; layout(location = 2) in vec4 v2;\n"
     "uniform vec4 c[96]; uniform int b;\n"
     "out vec4 v_color; out vec4 v_tc0; out vec2 v_tc1; out vec2 v_tc2; out vec3 v_normal; out vec3 v_view;\n"
     "vec4 pica_out(vec4 p){ return vec4(p.x, p.y, -(2.0 * p.z + p.w), p.w); }\n"
@@ -53,12 +53,23 @@ const char RENDER_VS_EFT[] =
     "  float v = (-0.5 + r.y) * -rep.y + t.y + (1.0 - t.w) * r.y;\n"
     "  return vec2(u, 1.0 - v);\n"
     "}\n"
+    /* primitive emitters (b bit 32: a non-instanced draw of more than one quad, the Fire / Tornado Rod cones and rings): the
+       programs 1, 3, 7, 12, 13, 16, 18, 21, 22 of JackAll.ptcl (disassembled) read all of v0 as the position (z scaled by c2.x
+       like x), the texture coordinate from v1 and multiply the colour by v2 (the instanced ones take z for the register offset) */
+    "vec2 tex_uv_prim(vec2 s, float ang, vec4 t, vec2 rep){\n"
+    "  float a = wrap_pi(ang), cs = cos(a), sn = sin(a);\n"
+    "  vec4 m = vec4(rep.x, rep.x, rep.y, rep.y) * vec4(s.x, 1.0 - s.y, s.x, 1.0 - s.y) - 0.5;\n"
+    "  vec2 r = vec2(m.x * cs - m.y * sn, m.z * sn + m.w * cs);\n"
+    "  vec2 uv = r * t.zw + t.xy + 0.5;\n"
+    "  return vec2(uv.x, 1.0 - uv.y);\n"
+    "}\n"
     "void main(){\n"
+    "  bool prim = (b & 32) != 0;\n"
     "  int type = b & 7; bool rot = (b & 8) != 0; int a = (b & 16) != 0 ? int(v0.z + 0.5) : 0;\n"
     "  vec4 P1 = c[1 + a], P2 = c[2 + a], P3 = c[3 + a], P4 = c[4 + a], P5 = c[5 + a], P6 = c[6 + a], P7 = c[7 + a];\n"
     "  vec3 E0 = c[8 + a].xyz, E1 = c[9 + a].xyz, E2 = c[10 + a].xyz;\n"
-    "  vec3 q = vec3((v0.xy + c[84].xy) * P2.xy, 0.0);\n"
-    "  if (type == 3) q = vec3(q.x, 0.0, -q.y);\n"
+    "  vec3 q = vec3((v0.xy + c[84].xy) * P2.xy, prim ? v0.z * P2.x : 0.0);\n"
+    "  if (type == 3) q = vec3(q.x, q.z, -q.y);\n"
     "  if (rot) q = euler(P7.xyz) * q;\n"
     "  vec3 w;\n"
     "  if (type == 0) {\n"
@@ -82,8 +93,14 @@ const char RENDER_VS_EFT[] =
     "  vec4 vw = vec4(dot(c[90], vec4(w, 1.0)), dot(c[91], vec4(w, 1.0)), dot(c[92], vec4(w, 1.0)), 1.0);\n"
     "  gl_Position = pica_out(vec4(dot(c[86], vw), dot(c[87], vw), dot(c[88], vw), dot(c[89], vw)));\n"
     "  v_color = clamp(P1, 0.0, 1.0) * c[82];\n"
+    "  if (prim) {\n"
+    "    v_color *= v2;\n"
+    "    v_tc0 = vec4(tex_uv_prim(v1.xy, P2.z, P3, c[83].xy), 0.0, 1.0);\n"
+    "    v_tc1 = tex_uv_prim(v1.xy, P2.w, P4, c[83].zw); v_tc2 = v_tc1;\n"
+    "  } else {\n"
     "  v_tc0 = vec4(tex_uv(v0.xy, P2.z, P3, c[83].xy), 0.0, 1.0);\n"
     "  v_tc1 = tex_uv(v0.xy, P2.w, P4, c[83].zw); v_tc2 = v_tc1;\n"
+    "  }\n"
     "  v_normal = vec3(0.0, 0.0, 1.0); v_view = -vw.xyz;\n"
     "}\n";
 

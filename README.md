@@ -150,7 +150,7 @@ Working: boot, title, file select, saving and loading; the story's first areas, 
 houses, items, enemies, combat; the Eastern Palace and its boss (Yuga, wall merging as a
 painting); late-game saves load (Death Mountain, Lorule).
 
-Known problems: the Fire / Tornado Rod flame cones are not drawn yet; some effects and cutscenes
+Known problems: the Fire / Tornado Rod effects were drawn wrongly or skipped until v0.2.14 (Fire Rod checked, Tornado Rod not yet); some effects and cutscenes
 are still wrong; most dungeons after the Eastern Palace are untested. Full list:
 [MISSING.md](MISSING.md). Please report what you find.
 

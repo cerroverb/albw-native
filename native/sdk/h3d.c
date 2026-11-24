@@ -853,7 +853,21 @@ int h3d_translate_live(uint32_t start, uint32_t end) {
                 }
                 if (d->eft_variant == -1) { g_live_dropped++; continue; }
                 if (r == 0x22E) { g_live_dropped++; continue; }   /* draw-arrays: not used by eft */
-                if (!d->reg[0x200]) {
+                static int abs_try = -1;
+                if (abs_try < 0) abs_try = getenv("ALBW_EFT_PRIM_SKIP") == NULL;   /* on by default; ALBW_EFT_PRIM_SKIP=1: the old behaviour */
+                if (!d->reg[0x200] && getenv("ALBW_EFT_LAYOUT_TRACE"))
+                    fprintf(stderr, "eft-layout: no-base kick count %u idx %08x fmt %08x %08x buf0 %08x %08x %08x written203 %d written201/2 %d%d fx %x\n",
+                            (unsigned)d->reg[0x228], (unsigned)d->reg[0x227], (unsigned)d->reg[0x201], (unsigned)d->reg[0x202],
+                            (unsigned)d->reg[0x203], (unsigned)d->reg[0x204], (unsigned)d->reg[0x205], d->written[0x203], d->written[0x201], d->written[0x202], d->fx_set);
+                int absp = 0;
+                if (!d->reg[0x200] && abs_try && d->reg[0x203] && (d->reg[0x205] >> 28)) {
+                    /* eft primitive emitters (Fire / Tornado Rod cones): base 0, the buffer addresses (0x203 + 3k) and the
+                       index word are absolute host addresses (31 bits: bit 31 = u16), the formats from earlier ranges */
+                    absp = 1;
+                    d->vtx_done = 0;
+                    d->written[0x201] = 1;
+                    for (int k = 0; k < 12; k++) if (d->reg[0x205 + 3 * k] >> 28) d->written[0x203 + 3 * k] = 1;
+                } else if (!d->reg[0x200]) {
                     /* no attribute base in the block: the vertex arrays are native ROP_ATTRIB ops of
                        the gr producers (markers in the range); a plain indexed draw on them, the
                        index register's 28-bit address completed at execution (ROP_DRAW flag 0x80) */
@@ -877,7 +891,7 @@ int h3d_translate_live(uint32_t start, uint32_t end) {
                         ROp *op = &d->ops.v[j];
                         uint32_t iw = d->reg[0x227];
                         op->flags |= 2 | 1;   /* keep the program; absolute index buffer address */
-                        op->u.ext.a = live_pa((d->reg[0x200] << 3) + (iw & 0x0FFFFFFFu));
+                        op->u.ext.a = live_pa((d->reg[0x200] << 3) + (iw & (absp ? 0x7FFFFFFFu : 0x0FFFFFFFu)));
                         op->unit = (uint8_t)(iw >> 31);
                     }
                 g_live_draws++;
