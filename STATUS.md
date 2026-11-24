@@ -97,6 +97,20 @@ and POSIX calls; SDL3.dll; a bundled Mesa OpenGL fallback. Details: [windows/REA
     Checked in the VM only. Also reported on #10: black screen after confirming the name, then a crash (RTX 5070 Ti,
     system OpenGL): no log yet.
 
+## Texture packs (issues 1 and 4)
+
+Citra / Azahar-format replacement textures work (`native/render/texpack.c`, `cityhash.c`; hook in `tex_upload`,
+`render.c`). A texture is found by `tex1_<w>x<h>_<CityHash64 of its raw bytes>_<PICA format>_mip0.png` (the new hash,
+`"use_new_hash": true`; old-hash packs are refused with a log line). Checked against Henriko Magnifico's ALBW 4K pack
+(1080p and 4K versions): the hash code matches Azahar's CityHash on random data for every length up to 70000, the
+title screen logo and intro paintings are replaced and upright (rows flipped for `flip_png_files`), 54 of the
+title/intro textures are found on Linux, the same hashes come out on 32-bit Windows (VM), where the loader finds
+the pack folder under `texture-pack\` by itself (`find_pack_dir`). Mip levels are generated; a replacement larger
+than `GL_MAX_TEXTURE_SIZE` is skipped. Not done: textures the game draws at run time (as in Citra), old-hash packs,
+stereoscopic 3D (issue 1), a memory budget for the 4K pack (about 1.9 GB of RGBA if every texture were loaded),
+and PNG decoding is on the render thread (a large texture can hitch the first time it appears). Gameplay beyond the
+title and intro not looked at yet.
+
 ## Open issues
 
 | # | Issue | Needs |
