@@ -180,9 +180,39 @@ static void describe_blocker(uintptr_t base, size_t size, char *out, size_t n) {
         a = (uintptr_t)mi.BaseAddress + mi.RegionSize;
     }
 }
+/* A system DLL (typically apphelp.dll, Windows' compatibility shim, which Windows loads into a program it
+   has not seen before) can sit inside a range at an address that stays the same until the next reboot,
+   so starting again does not help. Such a DLL is not needed by this program: unload it (it is only used
+   to apply compatibility fixes) and report whether anything was freed. */
+static char g_unloaded[MAX_PATH];   /* logged once the log file is open */
+static int unload_blockers(uintptr_t base, size_t size) {
+    MEMORY_BASIC_INFORMATION mi;
+    int freed = 0;
+    for (uintptr_t a = base; a < base + size; ) {
+        if (!VirtualQuery((void *)a, &mi, sizeof mi)) break;
+        if (mi.State != MEM_FREE && mi.Type == MEM_IMAGE && mi.AllocationBase) {
+            HMODULE m = (HMODULE)mi.AllocationBase;
+            char mod[MAX_PATH] = "";
+            GetModuleFileNameA(m, mod, sizeof mod);
+            int n = 0;
+            while (n < 8 && FreeLibrary(m)) {   /* the load count may be above 1 */
+                n++;
+                MEMORY_BASIC_INFORMATION t;
+                if (!VirtualQuery(m, &t, sizeof t) || t.State == MEM_FREE) break;
+            }
+            if (n) { snprintf(g_unloaded, sizeof g_unloaded, "%s", mod); freed = 1; }
+            a = (uintptr_t)m + 0x1000;
+            continue;
+        }
+        a = (uintptr_t)mi.BaseAddress + mi.RegionSize;
+    }
+    return freed;
+}
 static void reserve_fixed(void) {
     for (size_t i = 0; i < sizeof g_fixed / sizeof *g_fixed; i++)
-        if (!VirtualAlloc((void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS)) {
+        if (!VirtualAlloc((void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS) &&
+            !(unload_blockers(g_fixed[i].base, g_fixed[i].size) &&
+              VirtualAlloc((void *)g_fixed[i].base, g_fixed[i].size, MEM_RESERVE, PAGE_NOACCESS))) {
             DWORD err = GetLastError();
             /* Windows places heaps, stacks and DLLs differently on every start (ASLR): something
                sits in a range the game needs. Starting again almost always gets a free layout. */
@@ -1352,6 +1382,7 @@ int main(int argc, char **argv) {
     if (g_gl_tls_ret >= 64 || g_gl_tls_esp >= 64) fatal("no TLS slots for the OpenGL thunks");
 
     fprintf(stderr, "albw: log started (%s)\n", g_log_path[0] ? g_log_path : "console");
+    if (g_unloaded[0]) fprintf(stderr, "albw: unloaded %s, it sat inside the memory the game needs\n", g_unloaded);
     fprintf(stderr, "albw: stage: choosing OpenGL\n");
     choose_gl();
     fprintf(stderr, "albw: stage: loading SDL3.dll\n");
