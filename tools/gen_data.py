@@ -284,7 +284,7 @@ def main():
             out.append("    " + s)
         for off in range(size - size % 4, size):
             out.append("    .byte 0x%02X" % code[base + off - TEXT])
-    out += ["    .section .albw_zi,\"aw\",@nobits", "    .p2align 4", "    .globl albw_bss", "albw_bss:",
+    out += ["    .section .albw_zi,\"aw\",%nobits", "    .p2align 4", "    .globl albw_bss", "albw_bss:",
             "    .zero 0x%X" % BSS_SIZE]
 
     # data symbols used by the code

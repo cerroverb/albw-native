@@ -86,9 +86,8 @@ static char *g_ssmap_text;   /* <binary>.ssmap as read at startup (ss_preload) *
 static size_t g_ssmap_len;
 static int load_ssmap(void) {
     char path[4200];
-    ssize_t n = readlink("/proc/self/exe", g_exe, sizeof g_exe - 1);
-    if (n <= 0) { snprintf(g_ranges_err, sizeof g_ranges_err, "cannot find the binary"); return -1; }
-    g_exe[n] = 0;
+    snprintf(g_exe, sizeof g_exe, "%s", albw_exe_path());
+    if (!g_exe[0]) { snprintf(g_ranges_err, sizeof g_ranges_err, "cannot find the binary"); return -1; }
     snprintf(path, sizeof path, "%s.ssmap", g_exe);
     /* the copy read at startup (ss_preload): the file may be gone by now (relinked meanwhile) */
     FILE *f = g_ssmap_text ? fmemopen(g_ssmap_text, g_ssmap_len, "r") : fopen(path, "r");
@@ -130,9 +129,8 @@ static uint64_t build_hash(void) {
  * Only the file is read here; load_ssmap still parses it at the first save / load (same range
  * order as before), and albw_ss_frame_point is unchanged: states are saved from inside it. */
 __attribute__((constructor)) static void ss_preload(void) {
-    ssize_t n = readlink("/proc/self/exe", g_exe, sizeof g_exe - 1);
-    if (n <= 0) return;
-    g_exe[n] = 0;
+    snprintf(g_exe, sizeof g_exe, "%s", albw_exe_path());
+    if (!g_exe[0]) return;
     char path[4200];
     snprintf(path, sizeof path, "%s.ssmap", g_exe);
     FILE *f = fopen(path, "rb");
@@ -549,11 +547,13 @@ void albw_ss_fp_tail_work(void) {
     albw_os_ss_release_all();
     host_hold(0);
 }
+#if defined(__i386__)   /* only i386 states had that frame (ss_convert.c frame_point_tail) */
 __asm__(".text\n.globl albw_ss_fp_tail\n.type albw_ss_fp_tail, @function\nalbw_ss_fp_tail:\n"
         "    call albw_ss_fp_tail_work\n"
         "    addl g_ss_fp_tail_frame, %esp\n"
         "    popl %esi\n    popl %edi\n    popl %ebx\n    popl %ebp\n    ret\n"
         ".size albw_ss_fp_tail, .-albw_ss_fp_tail\n");
+#endif
 
 void albw_ss_request(int op, int slot) {
     if (slot < 0 || slot >= SS_SLOTS) return;

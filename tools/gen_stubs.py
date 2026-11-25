@@ -18,13 +18,15 @@ def syms(obj, *flags):
     return set(out.stdout.split())
 
 
-# ALBW_ARCH=x86_64 (tools/link64.sh, build_decomp.py --arch x86_64): the 64-bit libraries
+# ALBW_ARCH=x86_64 (tools/link64.sh, build_decomp.py --arch x86_64): the 64-bit libraries. ALBW_ARCH=armhf: 32-bit ARM
 # Library folders differ by distribution: Arch /usr/lib32, Debian/Ubuntu /usr/lib/i386-linux-gnu (and
 # /lib/...), Fedora/openSUSE /usr/lib; build.sh's own SDL3 in build/deps. A library not found here had
 # its functions stubbed, and the stubs shadowed the real ones (Ubuntu: "stub SDL_Init called").
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.environ.get("ALBW_ARCH") == "x86_64":
     _DIRS = ["/usr/lib", "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib64", "/lib64"]
+elif os.environ.get("ALBW_ARCH") == "armhf":   # built on a 32-bit ARM system (tools/link.sh ALBW_ARCH=armhf)
+    _DIRS = ["/usr/lib", "/usr/lib/arm-linux-gnueabihf", "/lib/arm-linux-gnueabihf"]
 else:
     _DIRS = [os.path.join(_ROOT, "build", "deps", "sdl3-i686", "lib"), "/usr/lib32",
              "/usr/lib/i386-linux-gnu", "/lib/i386-linux-gnu"]
@@ -49,6 +51,13 @@ def system_symbols():
     for lib in SYSTEM_LIBS:
         r = subprocess.run(["llvm-nm", "-D", "--defined-only", "--format=just-symbols", lib], capture_output=True, text=True)
         out |= {x.split("@")[0] for x in r.stdout.split()}
+    # and the static part of the C library every program links (ARM glibc has atexit only there)
+    for d in _DIRS:
+        nonshared = os.path.join(d, "libc_nonshared.a")
+        if os.path.exists(nonshared):
+            r = subprocess.run(["llvm-nm", "--defined-only", "--format=just-symbols", nonshared], capture_output=True, text=True)
+            out |= set(r.stdout.split())
+            break
     return out
 
 

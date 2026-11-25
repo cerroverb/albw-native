@@ -42,7 +42,7 @@ def main():
     for line in dis.splitlines():
         m = re.match(r'^([0-9a-f]+) <(.+)>:$', line)
         if m:
-            if fn and last and last[0] == 'call' and not NORETURN.search(last[1]) and fn not in KNOWN_DEAD:
+            if fn and last and last[0] in ('call', 'bl', 'blx') and not NORETURN.search(last[1]) and fn not in KNOWN_DEAD:
                 hits.append((fn, last[1]))
             if fn and seen and last is None and fn not in KNOWN_EMPTY and re.match(r'(func|FUN|f)_', fn):
                 empty.append(fn)

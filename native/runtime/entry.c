@@ -31,6 +31,19 @@ static int game_main(void *p);
 
 char **albw_argv;   /* for Esc > File > Reset game (platform.c: re-exec) */
 
+const char *albw_exe_path(void) {
+    static char path[4096];
+    if (!path[0]) {
+        const char *env = getenv("ALBW_EXE");
+        if (env && *env) snprintf(path, sizeof path, "%s", env);
+        else {
+            ssize_t n = readlink("/proc/self/exe", path, sizeof path - 1);
+            path[n > 0 ? n : 0] = 0;
+        }
+    }
+    return path;
+}
+
 /* Portable mode (GitHub issue 6): keep saves, save states, settings, screenshots and logs in one
  * folder instead of ~/.local/share, ~/.config and ~/.local/state. The folder is
  *   ALBW_DATA_DIR=<folder>, or
@@ -47,10 +60,7 @@ static void albw_portable_dirs(void) {
         char prog[4096] = "";
         const char *appimage = getenv("APPIMAGE");   /* set by the AppImage runtime: the .AppImage file */
         if (appimage && *appimage) snprintf(prog, sizeof prog, "%s", appimage);
-        else {
-            ssize_t n = readlink("/proc/self/exe", prog, sizeof prog - 1);
-            prog[n > 0 ? n : 0] = 0;
-        }
+        else snprintf(prog, sizeof prog, "%s", albw_exe_path());
         char *slash = strrchr(prog, '/');
         if (!slash) return;
         *slash = 0;

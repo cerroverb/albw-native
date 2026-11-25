@@ -155,12 +155,12 @@ static int sym_at(const Image *im, uint32_t a, int *first) {
 /* ------------------------------------------------------------------ this binary */
 static Image g_self;
 static int g_self_ok = -1;
-static uint8_t *g_self_file;   /* .symtab / .strtab / section names of /proc/self/exe */
+static uint8_t *g_self_file;   /* .symtab / .strtab / section names of this binary */
 
 static int self_image(void) {
     if (g_self_ok >= 0) return g_self_ok;
     g_self_ok = 0;
-    FILE *f = fopen("/proc/self/exe", "rb");
+    FILE *f = fopen(albw_exe_path(), "rb");
     if (!f) return 0;
     fseek(f, 0, SEEK_END);
     long n = ftell(f);
@@ -482,6 +482,10 @@ static uint32_t callsite_map(Conv *c, const Sym *s, const Sym *n, const uint8_t 
 extern uint32_t g_ss_fp_tail_frame;
 extern char albw_ss_fp_tail[];
 static uint32_t frame_point_tail(Conv *c, const Sym *s, const uint8_t *oc, uint32_t osz, uint32_t v) {
+#if !defined(__i386__)
+    (void)c, (void)s, (void)oc, (void)osz, (void)v;
+    return 0;
+#else
     uint32_t off = v - s->addr, frame;
     if (strcmp(s->name, "albw_ss_frame_point") || osz < 10 || off < 5 || off > osz || oc[off - 5] != 0xE8) return 0;
     if (memcmp(oc, "\x55\x53\x57\x56", 4)) return 0;
@@ -498,6 +502,7 @@ static uint32_t frame_point_tail(Conv *c, const Sym *s, const uint8_t *oc, uint3
         }
     }
     return 0;
+#endif
 }
 
 /* Heap-like memory (game heap, arena, renderer pools, static data) also holds asset bytes, floats
@@ -710,13 +715,13 @@ static int old_image(Conv *c, const Parse *ps) {
     return 0;
 }
 
-/* the executable's initial bytes for [addr, addr+size): PROGBITS sections from /proc/self/exe,
+/* the executable's initial bytes for [addr, addr+size): PROGBITS sections from this binary,
  * NOBITS (.bss) zero; bytes outside any section are left as they are */
 static void initial_image(uint8_t *dst, uint32_t addr, uint32_t size) {
     static uint8_t *img;
     static size_t imglen;
     if (!img) {
-        FILE *f = fopen("/proc/self/exe", "rb");
+        FILE *f = fopen(albw_exe_path(), "rb");
         if (!f) return;
         fseek(f, 0, SEEK_END); imglen = (size_t)ftell(f); fseek(f, 0, SEEK_SET);
         img = malloc(imglen);
