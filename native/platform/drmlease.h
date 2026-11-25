@@ -20,8 +20,10 @@
 bool drmlease_open(const char *want, int *w, int *h);
 /* the panel's orientation, counter-clockwise degrees as DRM counts them (Right Side Up: 270) */
 int drmlease_rotation(void);
-/* buffer i (0, 1) as a dma-buf for the GPU to draw into: XRGB8888, linear, `pitch` bytes a row, the
- * panel's own (unturned) w x h */
+/* the panel's buffers (drmlease.c hands them over as a mailbox) */
+#define DRMLEASE_BUFFERS 3
+/* buffer i (0 to DRMLEASE_BUFFERS - 1) as a dma-buf for the GPU to draw into: XRGB8888, linear,
+ * `pitch` bytes a row, the panel's own (unturned) w x h */
 void drmlease_buffer(int i, int *dmabuf, int *pitch, int *w, int *h);
 /* Once a frame: the compositor's and the panel's events, then the buffer to draw this frame's picture into,
  * or -1 (the last flip is still on its way, or the panel is gone: no picture this frame) */

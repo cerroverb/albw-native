@@ -207,7 +207,7 @@ static void plat_composite_to(GLuint fbo, const Layout *l);
 #include <unistd.h>
 static int g_lease;
 static Target lease_target;   /* the bottom screen, upright, at the panel's size */
-static struct { GLuint tex, fbo; EGLImageKHR image; } lease_buf[2];   /* the panel's buffers */
+static struct { GLuint tex, fbo; EGLImageKHR image; } lease_buf[DRMLEASE_BUFFERS];   /* the panel's buffers */
 static int lease_panel_w, lease_panel_h;   /* the panel's own size (unturned) */
 static GLuint lease_prog;
 static GLint lease_s, lease_t;
@@ -268,7 +268,9 @@ static void plat_lease_init(void) {
     }
     int w, h;
     if (!drmlease_open(want, &w, &h)) return;
-    if (!plat_lease_import(0) || !plat_lease_import(1)) {
+    int imported = 0;
+    while (imported < DRMLEASE_BUFFERS && plat_lease_import(imported)) imported++;
+    if (imported < DRMLEASE_BUFFERS) {   /* (a buffer left out would be framebuffer 0: the window) */
         fprintf(stderr, "platform: the panel's buffers cannot be drawn into (EGL image or framebuffer refused): the bottom screen stays in the window\n");
         drmlease_close();
         return;

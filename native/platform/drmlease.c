@@ -106,7 +106,7 @@ static bool wl_open(void) {
 /* ---------------------------------------------------------- the lease */
 
 #define MAX_OFFERS 8
-#define NBUF 3
+#define NBUF DRMLEASE_BUFFERS
 typedef struct {
 	struct wp_drm_lease_connector_v1* handle;
 	char name[32];
