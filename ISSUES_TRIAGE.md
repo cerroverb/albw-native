@@ -12,7 +12,7 @@ Last updated: 2026-11-25. Issue numbers are those of github.com/spacestate1/albw
 | 14 | No way to choose the game language | feature | **fixed in master**: Esc > File > Language, `language` line in layout.cfg, follows the computer's language, README |
 | 13 | Game won't start (two reports: crash, freeze) | Windows hang / crash | hang cause found and fixed in master (thread-exit destructors); crash in `func_001E06D0` open |
 | 12 | Crash after file selection screen | Windows hang | same cause as 13 / 10 / 7; fixed in master |
-| 11 | Steam Deck AppImage will not open after failed .3ds import | Linux | needs the user's ROM check; open |
+| 11 | Steam Deck AppImage will not open after failed .3ds import | Linux | **fixed in master**: a file the game cannot use is forgotten, with a clear message |
 | 10 | Black screen after naming the file, Windows | Windows hang | same cause; fixed in master (waiting for a confirming log) |
 | 9 | Version number in the AppImage | request | closed |
 | 8 | Cannot start from Game Mode (SteamOS) | closed | closed |
@@ -82,7 +82,7 @@ change). Menu entry: Esc > File > Language (saved as the `language` line of layo
 The reporter gave a .3ds and the program crashed; both v0.2.9 and v0.2.10 then fail to open. A commenter asked which ROM
 (it has to be the decrypted European dump). The AppImage remembers the chosen path; a bad choice (wrong region, encrypted)
 leaves a stored path that fails every time. Needs the log (`~/.local/state/albw-port/last-run.log`) and the file's SHA-1.
-Possible improvement: forget the stored ROM path when the check fails. Open.
+**Fixed in master:** the game now names the problem (another game, American / Japanese release, encrypted, not a 3DS image) and forgets the remembered file, so the next start asks again (native/sdk/fs.c `rom_forget`). The reporter's own cause is still unknown.
 
 ## Older / request issues
 

@@ -161,6 +161,26 @@ static int read_exact(int fd, void *buf, size_t n, uint64_t off) {
     return 0;
 }
 
+/* The AppImage and ALBW.exe remember the chosen file (rom_path in the config folder). A file the game cannot use
+ * (wrong release, encrypted, not a 3DS image) would be tried again on every start with no way to pick another
+ * (issue 11): forget it, so the next start asks again. */
+static void rom_forget(const char *path) {
+    char f[4096], saved[4096] = "";
+    const char *xdg = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+    if (xdg && *xdg) snprintf(f, sizeof f, "%s/albw-port/rom_path", xdg);
+    else if (home && *home) snprintf(f, sizeof f, "%s/.config/albw-port/rom_path", home);
+    else return;
+    FILE *c = fopen(f, "r");
+    if (!c) return;
+    if (fgets(saved, sizeof saved, c)) saved[strcspn(saved, "\r\n")] = 0;
+    fclose(c);
+    const char *a = strrchr(saved, '/'), *b = strrchr(path, '/');
+    if (!strcmp(saved, path) || (a && b && !strcmp(a, b))) {
+        if (remove(f) == 0) fprintf(stderr, "fs: that file was the remembered one: forgotten, the next start asks again\n");
+    }
+}
+#define ROM_FATAL(path, ...) do { rom_forget(path); runtime_fatal(__VA_ARGS__); } while (0)
+
 /* Locate the RomFS level-3 image and the ExeFS inside the ROM.  Called with fs_lock held. */
 static void rom_open_locked(void) {
     if (rom.ready)
@@ -184,11 +204,11 @@ static void rom_open_locked(void) {
     }
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0)
-        runtime_fatal("fs: cannot open the ROM '%s' (%s); set ALBW_ROM to your decrypted .3ds/.cxi",
+        ROM_FATAL(path, "fs: cannot open the ROM '%s' (%s); set ALBW_ROM to your decrypted .3ds/.cxi",
                       path, strerror(errno));
     uint8_t h[0x200];
     if (read_exact(fd, h, sizeof h, 0) != 0)
-        runtime_fatal("fs: ROM '%s' is too small", path);
+        ROM_FATAL(path, "fs: ROM '%s' is too small", path);
 
     uint64_t ncch;
     if (!memcmp(h + 0x100, "NCSD", 4)) {
@@ -196,11 +216,20 @@ static void rom_open_locked(void) {
     } else if (!memcmp(h + 0x100, "NCCH", 4)) {
         ncch = 0;                                  /* bare .cxi */
     } else {
-        runtime_fatal("fs: '%s' is neither an NCSD (.3ds) nor an NCCH (.cxi) image", path);
+        ROM_FATAL(path, "fs: '%s' is neither an NCSD (.3ds) nor an NCCH (.cxi) image", path);
     }
     uint8_t n[0x200];
     if (read_exact(fd, n, sizeof n, ncch) != 0 || memcmp(n + 0x100, "NCCH", 4) != 0)
-        runtime_fatal("fs: ROM '%s': no NCCH header at 0x%llx", path, (unsigned long long)ncch);
+        ROM_FATAL(path, "fs: ROM '%s': no NCCH header at 0x%llx", path, (unsigned long long)ncch);
+
+    /* product code (NCCH +0x150): the game code is built from the European release (CTR-P-BZLP) */
+    if (!memcmp(n + 0x150, "CTR-", 4)) {
+        if (memcmp(n + 0x150, "CTR-P-BZL", 9))
+            ROM_FATAL(path, "fs: '%s' is another game (%.10s): the European A Link Between Worlds (CTR-P-BZLP) is needed", path, (const char *)n + 0x150);
+        if (n[0x159] == 'E' || n[0x159] == 'J')
+            ROM_FATAL(path, "fs: '%s' is the %s release (%.10s): only the European one (CTR-P-BZLP) works", path,
+                      n[0x159] == 'E' ? "American" : "Japanese", (const char *)n + 0x150);
+    }
 
     rom.exefs_off = ncch + (uint64_t)rd32(n + 0x1A0) * 0x200;
     rom.exefs_size = (uint64_t)rd32(n + 0x1A4) * 0x200;
@@ -208,13 +237,13 @@ static void rom_open_locked(void) {
     uint64_t romfs = ncch + (uint64_t)rd32(n + 0x1B0) * 0x200;
     uint64_t romfs_size = (uint64_t)rd32(n + 0x1B4) * 0x200;
     if (romfs_size == 0)
-        runtime_fatal("fs: ROM '%s' has no RomFS", path);
+        ROM_FATAL(path, "fs: ROM '%s' has no RomFS", path);
     uint8_t iv[0x60];
     /* Some decryption tools leave the NCCH NoCrypto flag (0x18F bit 2) clear, so plaintext is
      * detected from the IVFC magic instead. */
     if (read_exact(fd, iv, sizeof iv, romfs) != 0 || memcmp(iv, "IVFC", 4) != 0 ||
         rd32(iv + 4) != 0x10000)
-        runtime_fatal("fs: ROM '%s': no plaintext RomFS IVFC header at 0x%llx (encrypted dump?)",
+        ROM_FATAL(path, "fs: ROM '%s': no plaintext RomFS IVFC header at 0x%llx (encrypted dump?)",
                       path, (unsigned long long)romfs);
     /* IVFC: master hash size at 0x08; level 3 = {u64 logical off, u64 size, u32 log2 block}
      * at 0x3C/0x44/0x4C.  Level 3 data follows the 0x60-byte header and the master hash,
@@ -223,17 +252,17 @@ static void rom_open_locked(void) {
     uint64_t l3_size = rd64(iv + 0x44);
     uint32_t l3_log2 = rd32(iv + 0x4C);
     if (l3_log2 < 4 || l3_log2 > 24)
-        runtime_fatal("fs: ROM '%s': bad IVFC level-3 block size 2^%u", path, l3_log2);
+        ROM_FATAL(path, "fs: ROM '%s': bad IVFC level-3 block size 2^%u", path, l3_log2);
     uint64_t blk = (uint64_t)1 << l3_log2;
     uint64_t l3 = (0x60 + (uint64_t)master + blk - 1) & ~(blk - 1);
     if (l3 + l3_size > romfs_size)
-        runtime_fatal("fs: ROM '%s': RomFS level 3 exceeds the RomFS", path);
+        ROM_FATAL(path, "fs: ROM '%s': RomFS level 3 exceeds the RomFS", path);
     rom.romfs_l3_off = romfs + l3;
     rom.romfs_l3_size = l3_size;
 
     uint8_t l3h[4];
     if (read_exact(fd, l3h, 4, rom.romfs_l3_off) != 0 || rd32(l3h) != 0x28)
-        runtime_fatal("fs: ROM '%s': RomFS level-3 header not found at 0x%llx", path,
+        ROM_FATAL(path, "fs: ROM '%s': RomFS level-3 header not found at 0x%llx", path,
                       (unsigned long long)rom.romfs_l3_off);
     rom.fd = fd;
     rom.ready = 1;
