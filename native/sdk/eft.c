@@ -30,6 +30,7 @@ static inline uint32_t G32(uint32_t a, uint32_t o) { uint32_t v; memcpy(&v, (con
 
 int h3d_translate_live(uint32_t start, uint32_t end);
 void func_006003D8(uint32_t pname, uint32_t *out);
+void func_00601378(int32_t bytes);
 
 uint32_t func_002E39E8__decomp(uint32_t self, uint32_t pass, uint32_t arg);
 void func_003F7CC4__decomp(uint32_t sys, uint32_t heap, uint32_t data, uint32_t id, uint32_t arg5);
@@ -92,11 +93,41 @@ static int eft_off(void) {
     return &g_dbg_eft_off ? g_dbg_eft_off : env;
 }
 
+extern uint32_t DAT_002e3d9c;   /* literal pool: the address of the pointer to the fog-holding scene object */
 uint32_t func_002E39E8(uint32_t self, uint32_t pass, uint32_t arg) {
     uint32_t p0 = 0, p1 = 0;
     func_006003D8(0x208, &p0);
     uint32_t r = func_002E39E8__decomp(self, pass, arg);
     func_006003D8(0x208, &p1);
+    /* The pass writes the scene fog (mode, colour, the 0x210-byte LUT block) into the effect library's own command
+       cursor, not into the range bracketed above, so until something else applied fog the room had none (Swamp Palace:
+       fog only appeared after the first sword swing). The fog object's data is what the pass copies from; send the same
+       words through the translator here (the values are the game's own, so repeating them is harmless). */
+    if (pass == 0 && !eft_off() && getenv("ALBW_EFT_FOG_OFF") == NULL) {
+        static uint32_t fogbuf[4 + 132];
+        uint32_t obj = DAT_002e3d9c ? G32(DAT_002e3d9c, 0) : 0, fp = obj ? G32(obj, 0x18) : 0;
+        if (fp) {
+            const uint8_t *c = (const uint8_t *)GA(fp);
+            uint32_t col; memcpy(&col, c + 2, 4);
+            fogbuf[0] = (c[0] ? 5u : 0u) | ((uint32_t)(c[1] != 0) << 16);
+            fogbuf[1] = 0x000500e0;
+            fogbuf[2] = col & 0xffffff;
+            fogbuf[3] = 0x000f00e1;
+            uint32_t n = 4;
+            if (c[0]) { memcpy(fogbuf + 4, c + 8, 0x210); n = 4 + 132; }
+            h3d_translate_live((uint32_t)(uintptr_t)fogbuf, (uint32_t)(uintptr_t)(fogbuf + n));
+            /* the translator rewrites the words into render records in place: append them to the game's command
+               stream (its cursor, then advance it as the game's own writers do) so they run in order */
+            uint32_t used = n;
+            while (used >= 2 && !fogbuf[used - 1] && !fogbuf[used - 2]) used -= 2;
+            uint32_t cur = 0;
+            func_006003D8(0x208, &cur);
+            if (cur && used) {
+                memcpy((void *)GA(cur), fogbuf, (size_t)used * 4);
+                func_00601378((int32_t)(used * 4));
+            }
+        }
+    }
     if (!eft_off() && p0 && p1 > p0) h3d_translate_live(p0, p1);
     return r;
 }
