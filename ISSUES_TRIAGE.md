@@ -24,6 +24,13 @@ Last updated: 2026-11-25. Issue numbers are those of github.com/spacestate1/albw
 | 2 | ARM64 Linux build | request | not started (the game code is 32-bit x86 here) |
 | 1 | Stereoscopic 3D with texture packs | request | not started |
 
+## Old save states after an update
+
+A save state (F6) holds the program's own stacks, so an update that changes those functions cannot load it ("... was
+running and changed in this build"). This happened with v0.2.15. Game saves (the in-game save) are not affected. To
+recover: start the version that made the state (the previous release; locally `build/albw-oldstates`), load it (F7), save
+in the game, then continue from that save in the new version.
+
 ## The Windows freeze family (issues 7, 10, 12, 13)
 
 **Reports.** Windows 10/11, NVIDIA RTX 3050/4060/5070 Ti, AMD RX 550/6600/9070 XT: the game starts, shows the title and the

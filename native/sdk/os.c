@@ -122,9 +122,10 @@ static atomic_uint g_next_thread_id = 1;
 static _Thread_local uint32_t t_id;          /* native thread id, 0 = not assigned yet */
 static _Thread_local OsObject *t_self;       /* this thread's object (lazily for foreign threads) */
 
-static uint32_t g_dbg_host_tid[256];   /* native id -> the host thread's id (the Windows watchdog lists threads by that) */
+/* inlined into code that is on the stack inside every save state (albw_os_ss_park_all): changing it makes older
+ * states unloadable */
 static uint32_t current_thread_id(void) {
-    if (!t_id) { t_id = atomic_fetch_add(&g_next_thread_id, 1); g_dbg_host_tid[t_id & 255] = (uint32_t)(uintptr_t)pthread_self(); }
+    if (!t_id) t_id = atomic_fetch_add(&g_next_thread_id, 1);
     return t_id;
 }
 
@@ -281,15 +282,15 @@ void albw_sched_dump(void) {
     for (int c = 0; c < 2; c++) {
         SchedRec *r = g_core[c].running;
         fprintf(stderr, "albw: sched: core %d running: %s", c, r ? "" : "nobody");
-        if (r) fprintf(stderr, "game thread %u (host thread %u) prio %d", r->id, g_dbg_host_tid[r->id & 255], (int)r->prio);
+        if (r) fprintf(stderr, "game thread %u prio %d", r->id, (int)r->prio);
         fprintf(stderr, "; ready:");
         int n = 0;
-        for (SchedRec *q = g_core[c].ready; q && n < 32; q = q->next, n++) fprintf(stderr, " %u(host %u,prio %d)", q->id, g_dbg_host_tid[q->id & 255], (int)q->prio);
+        for (SchedRec *q = g_core[c].ready; q && n < 32; q = q->next, n++) fprintf(stderr, " %u(prio %d)", q->id, (int)q->prio);
         fprintf(stderr, "\n");
     }
     int n = 0;
     for (SchedRec *q = g_all_sched; q && n < 64; q = q->all_next, n++)
-        fprintf(stderr, "albw: sched: thread %u host %u core %d prio %d %s\n", q->id, g_dbg_host_tid[q->id & 255], q->core, (int)q->prio,
+        fprintf(stderr, "albw: sched: thread %u core %d prio %d %s\n", q->id, q->core, (int)q->prio,
                 g_core[q->core].running == q ? "RUNNING" : q->queued ? "ready" : "blocked / sleeping");
     if (got) pthread_mutex_unlock(&g_sched_m);
 }
