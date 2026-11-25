@@ -79,6 +79,16 @@ if [ -x /usr/libexec/armada/device-env ]; then
 fi
 export LD_LIBRARY_PATH="$D/lib" LIBGL_DRIVERS_PATH="$D/lib/dri" GBM_BACKENDS_PATH="$D/lib/gbm" __EGL_VENDOR_LIBRARY_DIRS="$D/share/glvnd/egl_vendor.d"
 export ALBW_EXE="$D/albw"
+# no terminal (Steam Game Mode, desktop launchers): the output goes to a log file, as
+# packaging/appimage/AppRun does. The game's Help menu (Esc) copies it (ALBW_LOG_FILE).
+if [ ! -t 2 ]; then
+    LOGDIR="${XDG_STATE_HOME:-$HOME/.local/state}/albw-port"
+    if mkdir -p "$LOGDIR" 2>/dev/null; then
+        export ALBW_LOG_FILE="$LOGDIR/last-run.log"
+        echo "== ALBW native armhf $(date) GAMESCOPE_WAYLAND_DISPLAY=${GAMESCOPE_WAYLAND_DISPLAY:-} DISPLAY=${DISPLAY:-} lease ${ALBW_DRM_LEASE:-none}" > "$ALBW_LOG_FILE"
+        exec >> "$ALBW_LOG_FILE" 2>&1
+    fi
+fi
 exec "$D/lib/ld-linux-armhf.so.3" "$D/albw" "${ARGS[@]}"
 EOF
 chmod +x "$OUT/albw.sh"
