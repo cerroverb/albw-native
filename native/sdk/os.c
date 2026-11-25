@@ -294,6 +294,9 @@ void albw_sched_dump(void) {
     if (got) pthread_mutex_unlock(&g_sched_m);
 }
 
+uint32_t func_00103C80(uint32_t *out, void (*entry)(void *), uintptr_t arg, uintptr_t stack_top, int32_t priority, int32_t core);
+static void selftest_entry(void *a) { (void)a; }
+
 /* the main game thread joins the scheduler (native/runtime/entry.c, before game main) */
 void albw_sched_main_thread(void) {
     if (!sched_on() || t_sched) return;
@@ -306,6 +309,13 @@ void albw_sched_main_thread(void) {
     pthread_mutex_unlock(&g_sched_m);
     slot_attach(0);                 /* slot 0: the main game thread's fixed stack (runtime/lowmem.c) */
     ss_thread_register(0, 0);       /* save / load run on it (savestate.c keeps its stack) */
+    if (getenv("ALBW_SELFTEST_THREAD")) {   /* debug: a game thread that ends at once must give its core back (Windows loader, thread-end destructors) */
+        uint32_t h = 0;
+        fprintf(stderr, "selftest: starting a game thread that ends at once\n");
+        func_00103C80(&h, selftest_entry, 0, 0, DEFAULT_PRIORITY - 1, 0);
+        sleep_ns(300000000);
+        fprintf(stderr, "selftest: the main game thread got its core back after that thread ended: OK\n");
+    }
 }
 
 /* for other native areas: wrap a host blocking call made on a game thread (vblank sleeps,

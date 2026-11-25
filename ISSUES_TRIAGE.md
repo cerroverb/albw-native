@@ -46,6 +46,13 @@ destructors) and Wine under light use looked fine.
 exit (24 keys). Also added: `albw_sched_dump` (native/sdk/os.c), printed by the watchdog when a window stops responding:
 which game thread holds each core, the ready lists, and every thread's state, so a remaining freeze can be told apart.
 
+**Verified in the Windows 10 VM (2026-11-25).** Self-test `ALBW_SELFTEST_THREAD=1` (native/sdk/os.c: start a game thread that
+ends at once, then sleep): with the fixed loader the main thread gets its core back ("OK"); with the old loader (same game
+program, `FlsAlloc(NULL)`) the dump shows the ended thread still RUNNING on core 0 and the main thread "ready" for ever,
+which is the user logs' picture. (The first fixed build also had a bug of its own, caught in the VM: the new dump needed
+`pthread_mutex_trylock`, which the loader lacked; and running the C runtime's own key destructors killed the game at
+boot, so only the game's `thread_finished` destructor is run.)
+
 **To confirm.** A user log from the next Windows build. If a freeze remains, the new "albw: sched:" lines show who holds the
 core.
 

@@ -930,6 +930,14 @@ static int lx_mutex_unlock(LxMutex *m) {
     if (!mutex_release(m)) stray_unlock(m, __builtin_return_address(0), "that is not locked");
     return 0;
 }
+static int lx_mutex_trylock(LxMutex *m) {
+    DWORD me = GetCurrentThreadId();
+    if (m->kind == 1 && m->owner == me) { m->count++; return 0; }
+    if (InterlockedCompareExchange(&m->state, 1, 0) != 0) return LX_EBUSY;
+    m->owner = me;
+    m->count = 1;
+    return 0;
+}
 static int lx_mutexattr_init(int *a) { *a = 0; return 0; }
 static int lx_mutexattr_settype(int *a, int t) { *a = t; return 0; }
 static int lx_cond_init(LxCond *c, const int *attr) { memset(c, 0, sizeof *c); c->clock = attr ? *attr : 0; return 0; }
@@ -1055,7 +1063,11 @@ static PFLS_CALLBACK_FUNCTION const g_key_stubs[LX_MAX_DTORS] = {KDP(0), KDP(1),
 static volatile LONG g_key_n;
 static int lx_key_create(uint32_t *k, void *dtor) {
     PFLS_CALLBACK_FUNCTION cb = NULL;
-    if (dtor) {
+    /* only the game's own thread-end destructor (os.c thread_finished): the C runtime's (emutls) never ran here and
+       running them now would free thread-local data the game still uses while it exits */
+    static uint32_t only;
+    if (!only) only = elf_symbol("thread_finished");
+    if (dtor && (uint32_t)(uintptr_t)dtor == only) {
         LONG i = InterlockedIncrement(&g_key_n) - 1;
         if (i < LX_MAX_DTORS) { g_key_dtor[i] = dtor; cb = g_key_stubs[i]; }
         else fprintf(stderr, "albw: warning: more than %d pthread keys with destructors; the destructor of this one will not run\n", LX_MAX_DTORS);
@@ -1186,7 +1198,7 @@ static const Imp g_imports[] = {
     I("pthread_cond_init", lx_cond_init), I("pthread_cond_wait", lx_cond_wait), I("pthread_cond_timedwait", lx_cond_timedwait),
     I("pthread_cond_signal", lx_cond_signal), I("pthread_cond_broadcast", lx_cond_broadcast),
     I("pthread_mutexattr_init", lx_mutexattr_init), I("pthread_mutexattr_destroy", lx_zero), I("pthread_mutexattr_settype", lx_mutexattr_settype),
-    I("pthread_mutex_init", lx_mutex_init), I("pthread_mutex_lock", lx_mutex_lock), I("pthread_mutex_unlock", lx_mutex_unlock),
+    I("pthread_mutex_init", lx_mutex_init), I("pthread_mutex_lock", lx_mutex_lock), I("pthread_mutex_unlock", lx_mutex_unlock), I("pthread_mutex_trylock", lx_mutex_trylock),
     I("pthread_create", lx_pthread_create), I("pthread_join", lx_pthread_join), I("pthread_tryjoin_np", lx_pthread_tryjoin_np),
     I("pthread_self", lx_pthread_self), I("pthread_exit", lx_pthread_exit), I("pthread_setname_np", lx_zero),
     I("pthread_key_create", lx_key_create), I("pthread_getspecific", lx_getspecific), I("pthread_setspecific", lx_setspecific),
