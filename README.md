@@ -105,6 +105,13 @@ One window shows one screen at a time – handy on a laptop, TV or the Steam Dec
 
 Saves and save states live in `~/.local/share/albw-port/`, settings in `~/.config/albw-port/`.
 
+### Language
+
+The European game has English, French, German, Italian and Spanish text, all in your ROM. By default the game follows
+your computer's language (English for any other). To choose: Esc > **File** > **Language**, then File > **Reset game**
+(the text loads at start-up). The same setting is the `language` line in `layout.cfg` (`system`, `en`, `fr`, `de`, `it`,
+`es`); `ALBW_LANGUAGE=<fr|de|it|es|en or a 3DS code 0-11>` overrides it.
+
 **Portable mode:** create a folder named `albw-data` next to the AppImage (or the program) and
 everything – saves, save states, settings, screenshots, logs – is kept in it. Or start with
 `ALBW_DATA_DIR=/any/folder`.

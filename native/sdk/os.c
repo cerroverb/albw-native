@@ -122,8 +122,9 @@ static atomic_uint g_next_thread_id = 1;
 static _Thread_local uint32_t t_id;          /* native thread id, 0 = not assigned yet */
 static _Thread_local OsObject *t_self;       /* this thread's object (lazily for foreign threads) */
 
+static uint32_t g_dbg_host_tid[256];   /* native id -> the host thread's id (the Windows watchdog lists threads by that) */
 static uint32_t current_thread_id(void) {
-    if (!t_id) t_id = atomic_fetch_add(&g_next_thread_id, 1);
+    if (!t_id) { t_id = atomic_fetch_add(&g_next_thread_id, 1); g_dbg_host_tid[t_id & 255] = (uint32_t)(uintptr_t)pthread_self(); }
     return t_id;
 }
 
@@ -270,6 +271,27 @@ static void sched_yield_turn(void) {
         wait_turn_locked(r);
     }
     pthread_mutex_unlock(&g_sched_m);
+}
+
+/* debug (the Windows watchdog calls this when a window stops responding): who holds each core's token, the ready
+ * lists, and every game thread's state. Takes no lock that could be the cause of the hang (try-lock). */
+void albw_sched_dump(void) {
+    int got = pthread_mutex_trylock(&g_sched_m) == 0;
+    fprintf(stderr, "albw: sched: lock %s\n", got ? "taken" : "BUSY (listing without it)");
+    for (int c = 0; c < 2; c++) {
+        SchedRec *r = g_core[c].running;
+        fprintf(stderr, "albw: sched: core %d running: %s", c, r ? "" : "nobody");
+        if (r) fprintf(stderr, "game thread %u (host thread %u) prio %d", r->id, g_dbg_host_tid[r->id & 255], (int)r->prio);
+        fprintf(stderr, "; ready:");
+        int n = 0;
+        for (SchedRec *q = g_core[c].ready; q && n < 32; q = q->next, n++) fprintf(stderr, " %u(host %u,prio %d)", q->id, g_dbg_host_tid[q->id & 255], (int)q->prio);
+        fprintf(stderr, "\n");
+    }
+    int n = 0;
+    for (SchedRec *q = g_all_sched; q && n < 64; q = q->all_next, n++)
+        fprintf(stderr, "albw: sched: thread %u host %u core %d prio %d %s\n", q->id, g_dbg_host_tid[q->id & 255], q->core, (int)q->prio,
+                g_core[q->core].running == q ? "RUNNING" : q->queued ? "ready" : "blocked / sleeping");
+    if (got) pthread_mutex_unlock(&g_sched_m);
 }
 
 /* the main game thread joins the scheduler (native/runtime/entry.c, before game main) */

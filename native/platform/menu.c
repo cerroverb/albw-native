@@ -70,14 +70,14 @@ static MenuVtx menu_vtx[MENU_MAX_VTX];
 static int menu_nv;
 
 enum { MI_RESUME, MI_WINDOWS, MI_SINGLE, MI_PRESET, MI_SWAP, MI_FILTER, MI_INTEGER, MI_RES, MI_FULLSCREEN, MI_EDIT,
-       MI_CONTROLS, MI_QUIT, MI_STYLE, MI_BIND_DEV, MI_BIND_RESET, MI_SS_SLOT, MI_SS_SAVE, MI_SS_LOAD, MI_DBG_EFT, MI_DBG_FOG, MI_DBG_FPS, MI_DBG_SPEED, MI_WIDE, MI_RESET, MI_LOG_COPY, MI_LOG_FOLDER, MI_LOG_PATH, MI_REPORT, MI_DBG_LOG, MI_ABOUT_VER, MI_ABOUT_BUILD, MI_ABOUT_SITE, MI_SET_SEL, MI_SET_LOAD, MI_COUNT };
+       MI_CONTROLS, MI_QUIT, MI_STYLE, MI_BIND_DEV, MI_BIND_RESET, MI_SS_SLOT, MI_SS_SAVE, MI_SS_LOAD, MI_DBG_EFT, MI_DBG_FOG, MI_DBG_FPS, MI_DBG_SPEED, MI_WIDE, MI_RESET, MI_LOG_COPY, MI_LOG_FOLDER, MI_LOG_PATH, MI_REPORT, MI_DBG_LOG, MI_ABOUT_VER, MI_ABOUT_BUILD, MI_ABOUT_SITE, MI_SET_SEL, MI_SET_LOAD, MI_LANG, MI_COUNT };
 
 typedef struct { const char *title; const int *items; int n; const char *const *notes; } MenuDef;
 #define MI_BIND_BASE 200   /* MI_BIND_BASE + InAction: one Controls row per action */
 static int menu_controls_items[2 + IN_ACTION_COUNT] = {MI_BIND_DEV, MI_BIND_RESET};   /* rest: menu_gl_init */
 static const char *const menu_controls_notes[] = {"Enter: press the new key / button   - or Delete: clear",
                                                   "Several keys: edit input.cfg (\"A, B\" or \"Ctrl&X\")", NULL};
-static const int menu_file_items[] = {MI_RESUME, MI_SS_SLOT, MI_SS_SAVE, MI_SS_LOAD, MI_SET_SEL, MI_SET_LOAD, MI_CONTROLS, MI_RESET, MI_QUIT};
+static const int menu_file_items[] = {MI_RESUME, MI_SS_SLOT, MI_SS_SAVE, MI_SS_LOAD, MI_SET_SEL, MI_SET_LOAD, MI_LANG, MI_CONTROLS, MI_RESET, MI_QUIT};
 static const int menu_video_items[] = {MI_WINDOWS, MI_SINGLE, MI_WIDE, MI_PRESET, MI_SWAP, MI_FILTER, MI_INTEGER, MI_RES, MI_FULLSCREEN, MI_EDIT, MI_STYLE};
 static const int menu_help_items[] = {MI_LOG_COPY, MI_LOG_FOLDER, MI_REPORT, MI_LOG_PATH};
 static const char *const menu_help_notes[] = {"Copy log, then paste it into the GitHub issue (Ctrl+V)",
@@ -191,6 +191,11 @@ static void menu_label(int i, char *buf, size_t n) {
     case MI_BIND_RESET: snprintf(buf, n, "Reset %s controls to defaults", g_bind_pad ? "controller" : "keyboard"); break;
     case MI_WINDOWS: snprintf(buf, n, "Windows        < %s >", g_separate ? "Separate" : "Joined"); break;
     case MI_SINGLE: snprintf(buf, n, "Single screen  < %s >", g_layout_cfg.single_screen ? "On (Tab: other screen)" : "Off"); break;
+    case MI_LANG: {
+        static const char *const nm[] = {"Computer's language", "English", "Francais", "Deutsch", "Italiano", "Espanol"};
+        snprintf(buf, n, "Language       < %s >", nm[(unsigned)g_layout_cfg.language < 6 ? g_layout_cfg.language : 0]);
+        break;
+    }
     case MI_WIDE: snprintf(buf, n, "Widescreen (F10)  < %s >", g_layout_cfg.widescreen ? "16:9" : "Off (5:3)"); break;
     case MI_PRESET: snprintf(buf, n, "Layout         < %s >", layout_preset_name(g_layout_cfg.preset)); break;
     case MI_SWAP: snprintf(buf, n, "Swap screens   < %s >", g_layout_cfg.swap ? "On" : "Off"); break;
@@ -524,6 +529,11 @@ static void menu_activate(int i, int dir) {
         break;
     }
     case MI_SINGLE: plat_single_screen_set(!g_layout_cfg.single_screen); break;
+    case MI_LANG:   /* the text archive loads at start-up: saved now, used after File > Reset game */
+        g_layout_cfg.language = (g_layout_cfg.language + (dir < 0 ? 5 : 1)) % 6;
+        if (layout_save(&g_layout_cfg, NULL) == 0) snprintf(g_menu_note, sizeof g_menu_note, "Language saved: File > Reset game to use it");
+        else snprintf(g_menu_note, sizeof g_menu_note, "Cannot save the language setting");
+        break;
     case MI_WIDE: plat_widescreen_set(!g_layout_cfg.widescreen); break;
     case MI_SWAP: g_layout_cfg.swap ^= 1; plat_layout_changed(); break;
     case MI_FILTER: g_layout_cfg.linear_filter ^= 1; plat_layout_changed(); break;

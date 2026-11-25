@@ -492,12 +492,57 @@ uint32_t func_003DB6A0(uint32_t *out_steps) {
 #define CFG_COUNTRY_UK 110
 #define CFG_USERNAME "Link"
 
+/* language code from a name or number: "fr", "French", "fr_FR.UTF-8", "2"; -1 = not recognised */
+static int lang_code(const char *s) {
+    while (*s == ' ' || *s == '\t' || *s == '"') s++;
+    if (*s >= '0' && *s <= '9') { int v = atoi(s); return v >= 0 && v <= 11 ? v : -1; }
+    static const struct { const char *p; int code; } t[] = {
+        {"en", 1}, {"fr", 2}, {"de", 3}, {"ge", 3}, {"it", 4}, {"es", 5}, {"sp", 5}, {"ja", 0}, {"jp", 0}, {"zh", 6}, {"ko", 7}, {"nl", 8}, {"pt", 9}, {"ru", 10}};
+    for (unsigned i = 0; i < sizeof t / sizeof *t; i++)
+        if ((s[0] | 32) == t[i].p[0] && (s[1] | 32) == t[i].p[1]) return t[i].code;
+    return -1;
+}
+
+/* The game language, first found of: ALBW_LANGUAGE (power users), a `language <fr|de|it|es|en|0-11>` line in
+ * layout.cfg (the config folder), the computer's own language (LC_ALL / LC_MESSAGES / LANG; the Windows loader
+ * sets LANG from the user's language), English. The EU game has English, French, German, Italian and Spanish
+ * text: any other language falls back to English. The text archive loads at start-up, so a change needs a restart. */
+extern const char *layout_default_path(void);
+static int cfg_language(void) {
+    static int cached = -1;
+    if (cached >= 0) return cached;
+    int code = -1, forced = 0;
+    const char *e = getenv("ALBW_LANGUAGE");
+    if (e && *e) forced = (code = lang_code(e)) >= 0;
+    if (code < 0) {
+        FILE *f = fopen(layout_default_path(), "r");
+        char line[256];
+        while (f && fgets(line, sizeof line, f)) {
+            char *h = strchr(line, '#');
+            if (h) *h = 0;
+            char key[32] = "", arg[64] = "";
+            if (sscanf(line, "%31s %63s", key, arg) == 2 && !strcmp(key, "language")) { code = lang_code(arg); break; }
+        }
+        if (f) fclose(f);
+    }
+    if (code < 0) {
+        const char *v = getenv("LC_ALL");
+        if (!v || !*v) v = getenv("LC_MESSAGES");
+        if (!v || !*v) v = getenv("LANG");
+        if (v && *v) code = lang_code(v);
+    }
+    if (!forced && (code < 1 || code > 5)) code = CFG_DEFAULT_LANGUAGE;   /* the EU game ships 1-5 only */
+    static int logged;
+    if (!logged++) fprintf(stderr, "cfg: game language %d (%s)\n", code, code == 0 ? "Japanese" : code == 1 ? "English" : code == 2 ? "French" : code == 3 ? "German" : code == 4 ? "Italian" : code == 5 ? "Spanish" : "other");
+    return cached = code;
+}
+
 static void cfg_block(uint32_t block, uint8_t *out, uint32_t size) {
     static int unknown_logged;
     memset(out, 0, size);
     switch (block) {
     case 0x000A0002:  /* system language (u8) */
-        if (size >= 1) out[0] = (uint8_t)env_int("ALBW_LANGUAGE", CFG_DEFAULT_LANGUAGE, 0, 11);
+        if (size >= 1) out[0] = (uint8_t)cfg_language();
         break;
     case 0x000A0000:  /* user name: UTF-16 [10] + NUL, then ng-word flag / version (0x1C bytes) */
         put_utf16(out, size / 2 < 11 ? size / 2 : 11, CFG_USERNAME);

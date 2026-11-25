@@ -529,6 +529,10 @@ static DWORD WINAPI watchdog_main(void *p) {
                 fprintf(stderr, "albw: watchdog %u: guard_lock owner thread %lu, count %d, kind %d, state %#x\n", r + 1, (unsigned long)m[1], (int)m[2], (int)m[3], (unsigned)m[0]);
             }
         }
+        {   /* the game's own scheduler: which game thread holds the application core */
+            uint32_t sd = elf_symbol("albw_sched_dump");
+            if (sd) ((void (*)(void))(uintptr_t)sd)();
+        }
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
         if (snap == INVALID_HANDLE_VALUE) continue;
         static ThreadSnap snaps[64];
@@ -1037,7 +1041,28 @@ static void lx_pthread_exit(void *r) {
     if (t) t->ret = (uintptr_t)r;
     ExitThread(0);
 }
-static int lx_key_create(uint32_t *k, void *dtor) { (void)dtor; *k = FlsAlloc(NULL); return *k == FLS_OUT_OF_INDEXES ? 11 : 0; }
+/* Key destructors: glibc runs them when a thread ends; the game relies on that (its thread key's destructor gives the
+   thread's scheduler core back and wakes joiners). Without them a finished game thread kept the application core for
+   ever and every other game thread waited for it (the freeze after the file select, issues 7, 10, 12, 13). A fiber-local
+   storage callback gets only the value, so each key gets its own small stub. */
+#define LX_MAX_DTORS 24
+static void *g_key_dtor[LX_MAX_DTORS];
+static void key_dtor_stub(int i, PVOID v) { if (v && g_key_dtor[i]) call_elf1(g_key_dtor[i], (uintptr_t)v); }
+#define KD(n) static void WINAPI key_dtor_##n(PVOID v) { key_dtor_stub(n, v); }
+KD(0) KD(1) KD(2) KD(3) KD(4) KD(5) KD(6) KD(7) KD(8) KD(9) KD(10) KD(11) KD(12) KD(13) KD(14) KD(15) KD(16) KD(17) KD(18) KD(19) KD(20) KD(21) KD(22) KD(23)
+#define KDP(n) key_dtor_##n
+static PFLS_CALLBACK_FUNCTION const g_key_stubs[LX_MAX_DTORS] = {KDP(0), KDP(1), KDP(2), KDP(3), KDP(4), KDP(5), KDP(6), KDP(7), KDP(8), KDP(9), KDP(10), KDP(11), KDP(12), KDP(13), KDP(14), KDP(15), KDP(16), KDP(17), KDP(18), KDP(19), KDP(20), KDP(21), KDP(22), KDP(23)};
+static volatile LONG g_key_n;
+static int lx_key_create(uint32_t *k, void *dtor) {
+    PFLS_CALLBACK_FUNCTION cb = NULL;
+    if (dtor) {
+        LONG i = InterlockedIncrement(&g_key_n) - 1;
+        if (i < LX_MAX_DTORS) { g_key_dtor[i] = dtor; cb = g_key_stubs[i]; }
+        else fprintf(stderr, "albw: warning: more than %d pthread keys with destructors; the destructor of this one will not run\n", LX_MAX_DTORS);
+    }
+    *k = FlsAlloc(cb);
+    return *k == FLS_OUT_OF_INDEXES ? 11 : 0;
+}
 static void *lx_getspecific(uint32_t k) { return FlsGetValue(k); }
 static int lx_setspecific(uint32_t k, const void *v) { return FlsSetValue(k, (void *)v) ? 0 : LX_EINVAL; }
 static int lx_once(volatile LONG *o, void *fn) {
@@ -1423,6 +1448,17 @@ int main(int argc, char **argv) {
     /* first: before any DLL is loaded */
     if (getenv("ALBW_LAUNCHED")) { g_launched = 1; _putenv("ALBW_LAUNCHED="); }   /* not inherited by "Reset game" */
     else if (!getenv("ALBW_NO_LAUNCHER")) launch_reserved();
+    if (!getenv("LANG") && !getenv("LC_ALL")) {   /* the game's language follows the computer's (services.c: LANG, e.g. fr_FR) */
+        WCHAR wl[LOCALE_NAME_MAX_LENGTH];
+        if (GetUserDefaultLocaleName(wl, LOCALE_NAME_MAX_LENGTH) > 0) {
+            char l[64], e[80];
+            int k = 0;
+            for (; wl[k] && k < 60; k++) l[k] = wl[k] == '-' ? '_' : (char)wl[k];
+            l[k] = 0;
+            snprintf(e, sizeof e, "LANG=%s", l);
+            _putenv(e);
+        }
+    }
     reserve_fixed();
 
     /* replacement textures (issues 1 and 4): a folder "texture-pack" next to ALBW.exe, unless ALBW_TEXTURE_PACK says

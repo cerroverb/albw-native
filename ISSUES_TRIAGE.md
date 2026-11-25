@@ -1,0 +1,85 @@
+# Issue triage
+
+What each GitHub issue is, what the evidence says, and what was done. Newest work at the top of each entry.
+Updated as issues are worked through. (Status: **fixed in master** = in the repository, not yet in a release.)
+
+Last updated: 2026-11-25. Issue numbers are those of github.com/spacestate1/albw-native.
+
+## Summary
+
+| # | Title | Kind | Status |
+|---|---|---|---|
+| 14 | No way to choose the game language | feature | **fixed in master**: Esc > File > Language, `language` line in layout.cfg, follows the computer's language, README |
+| 13 | Game won't start (two reports: crash, freeze) | Windows hang / crash | hang cause found and fixed in master (thread-exit destructors); crash in `func_001E06D0` open |
+| 12 | Crash after file selection screen | Windows hang | same cause as 13 / 10 / 7; fixed in master |
+| 11 | Steam Deck AppImage will not open after failed .3ds import | Linux | needs the user's ROM check; open |
+| 10 | Black screen after naming the file, Windows | Windows hang | same cause; fixed in master (waiting for a confirming log) |
+| 9 | Version number in the AppImage | request | closed |
+| 8 | Cannot start from Game Mode (SteamOS) | closed | closed |
+| 7 | Cannot start the game (Windows, freeze at boot) | Windows | boot freeze fixed in v0.2.11; the later freeze is the thread-exit bug |
+| 6 | Launcher and portable installation | request | portable mode done (v0.2.7); launcher window not built |
+| 5 | Port does not use the dGPU on Linux | closed | closed |
+| 4 | Texture pack support | request | done in v0.2.13 (needs a pack with the new hash) |
+| 3 | 120+ FPS | request | not started |
+| 2 | ARM64 Linux build | request | not started (the game code is 32-bit x86 here) |
+| 1 | Stereoscopic 3D with texture packs | request | not started |
+
+## The Windows freeze family (issues 7, 10, 12, 13)
+
+**Reports.** Windows 10/11, NVIDIA RTX 3050/4060/5070 Ti, AMD RX 550/6600/9070 XT: the game starts, shows the title and the
+file select, and after a file is chosen (some reports: after about a minute of play) the window goes black / "not
+responding". albw.log from #10 (v0.2.13), #12 (v0.2.14) and #13 (v0.2.14) show the same picture at the watchdog sample:
+
+- the window thread is fine until the game stops answering; "NOT RESPONDING" first at 62 s (#10, #13) or 122 s (#12);
+- the game's main thread waits in `sched_acquire` (called from `plat_end_frame`): it wants the application core back
+  after presenting a frame;
+- every other game thread is in `arb_wait` (a CriticalSection / light event), or asleep in `sleep_ns`; none is running.
+
+**Cause (found 2026-11-25).** The game threads are scheduled one at a time per core (native/sdk/os.c, app-core
+scheduling): a running thread owns a token, handed on when it blocks or ends. A thread's end runs a pthread key destructor
+(`thread_finished`) that gives the token back. The Windows loader's `pthread_key_create` ignored the destructor
+(`FlsAlloc(NULL)`), so on Windows a game thread that finished kept the token for ever and all the others waited. This
+matches the freeze arriving when the game loads the save (loader threads end), and it is why Linux (glibc runs key
+destructors) and Wine under light use looked fine.
+
+**Fix.** `windows/loader.c`: `lx_key_create` now passes an FLS callback per key that calls the game's destructor on thread
+exit (24 keys). Also added: `albw_sched_dump` (native/sdk/os.c), printed by the watchdog when a window stops responding:
+which game thread holds each core, the ready lists, and every thread's state, so a remaining freeze can be told apart.
+
+**To confirm.** A user log from the next Windows build. If a freeze remains, the new "albw: sched:" lines show who holds the
+core.
+
+## #13 second report: crash in `func_001E06D0` (user vi7ual, v0.2.14, RTX 4060)
+
+`CRASH 0xc0000005 at func_001E06D0+0x317`, eax 0x54, edi 0, right after the audio start-up line (before the renderer is
+ready). The code: `edi = func_001E1228(param_1, &local, 0)` returned NULL, then `[edi+0x58]` is read. `func_001E1228` is the
+resource-slot allocator used while loading an `Archive/<name>` entry (it fills a record from a pool / heap); NULL means the
+pool or heap could not give one. Not reproduced. Possibly the same family (a thread-ordering problem on Windows, where the
+scheduler token was never returned) or a memory-range problem on that PC. Open; check again after the thread-exit fix.
+
+## #12 / #13 (NEONZARIN) details
+
+- #12: `exception 0x406d1388` in the log is the debugger "set thread name" exception: harmless. The freeze is the family above.
+- #13 comment (RX 550, v0.2.14): the same freeze; the AMD GPU is not the cause.
+
+## #14 language
+
+The port always reported English (`cfg_block` 0x000A0002). Now (native/sdk/services.c, `cfg_language`): `ALBW_LANGUAGE`
+(unchanged, any code 0-11), else a `language <fr|de|it|es|en|0-11>` line in layout.cfg, else the computer's language
+(`LC_ALL` / `LC_MESSAGES` / `LANG`; the Windows loader sets `LANG` from the user's locale), else English. The EU game has
+English, French, German, Italian and Spanish; anything else becomes English. The setting is read at start-up (restart to
+change). Menu entry: Esc > File > Language (saved as the `language` line of layout.cfg, used after File > Reset game); README "Language".
+
+## #11 Steam Deck: AppImage will not open after a failed import
+
+The reporter gave a .3ds and the program crashed; both v0.2.9 and v0.2.10 then fail to open. A commenter asked which ROM
+(it has to be the decrypted European dump). The AppImage remembers the chosen path; a bad choice (wrong region, encrypted)
+leaves a stored path that fails every time. Needs the log (`~/.local/state/albw-port/last-run.log`) and the file's SHA-1.
+Possible improvement: forget the stored ROM path when the check fails. Open.
+
+## Older / request issues
+
+- #7 (Windows, freeze at boot): the boot freeze was the SRW lock bug (v0.2.11); later logs show the thread-exit freeze above.
+- #6: portable mode exists (folder `albw-data`); a launcher window is still open.
+- #4 / #1: texture packs work since v0.2.13 (Citra/Azahar new-hash format); stereoscopic 3D not started.
+- #3: 120 fps interpolation not started. #2: ARM64 not started.
