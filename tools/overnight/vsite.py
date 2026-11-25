@@ -1,6 +1,6 @@
 # usage: vsite.py OFFSET USA... : per function, ARM (r1, r2) setup of each call through vtable +OFFSET vs Ghidra's calls
 import sys, re, json, bisect, glob
-S = "${TMPDIR:-/tmp}/albw-scratch/96b63aab-0bb4-44a9-bf13-f56921e7bb3b/scratchpad"
+S = "/tmp/claude-1000/-storage01-code-c-things-albw-port/96b63aab-0bb4-44a9-bf13-f56921e7bb3b/scratchpad"
 off = int(sys.argv[1], 16)
 m = json.load(open("../albw-decomp-ai/shared/eu_usa_map.json"))
 starts = sorted(int(v["eu"], 16) for v in m.values())

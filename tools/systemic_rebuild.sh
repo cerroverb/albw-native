@@ -30,7 +30,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 P=$PWD
 D=$(cd "$P/../albw-decomp-ai" && pwd)
-GH=${GHIDRA_HEADLESS:-/opt/ghidra/support/analyzeHeadless}
+GH=${GHIDRA_HEADLESS:-<your Ghidra 12.0.2 install>/support/analyzeHeadless}
 PY=${ALBW_PY:-$D/.venv/bin/python}
 PROJ=$D/logs/ghidra_full
 SY=$P/native/robust/systemic
