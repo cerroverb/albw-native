@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# The 32-bit ARM build as a folder that runs on a 64-bit ARM Linux with no 32-bit libraries of its own
+# (the AYN Thor under Armada: its kernel runs 32-bit programs on the cores that can, with
+# allow_mismatched_32bit_el0). Run on the 32-bit ARM system or container that built build/albw
+# (ALBW_ARCH=armhf tools/link.sh): the program, the dynamic loader and every library it and Mesa
+# load, from that system, plus albw.sh, which starts the program through the bundled loader.
+#
+#   tools/make_armhf_bundle.sh [out]     default build/albw-armhf (and build/albw-armhf.tar.gz)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+OUT=${1:-build/albw-armhf}
+[[ $(uname -m) == armv7l || $(uname -m) == armv8l ]] || { echo "run on the 32-bit ARM system that built build/albw"; exit 1; }
+[[ -f build/albw && -f build/albw.ssmap ]] || { echo "build/albw missing: ALBW_ARCH=armhf tools/link.sh"; exit 1; }
+rm -rf "$OUT"
+mkdir -p "$OUT/lib/dri" "$OUT/share/glvnd/egl_vendor.d"
+cp build/albw build/albw.ssmap "$OUT/"
+# opened at run time, not linked: GL / EGL through glvnd and Mesa (Adreno: msm), Wayland (SDL, the
+# leased panel), X11 (SDL under gamescope's Xwayland), sound (SDL: PipeWire, PulseAudio, ALSA)
+DLOPEN=(libGL.so.1 libEGL.so.1 libGLX.so.0 libGLdispatch.so.0 libEGL_mesa.so.0 libGLX_mesa.so.0 libgbm.so.1
+        libwayland-client.so.0 libwayland-egl.so.1 libwayland-cursor.so.0 libxkbcommon.so.0 libdecor-0.so.0
+        libX11.so.6 libX11-xcb.so.1 libXext.so.6 libXcursor.so.1 libXi.so.6 libXrandr.so.2 libXfixes.so.3
+        libXss.so.1 libpulse.so.0 libasound.so.2 libpipewire-0.3.so.0)
+DRI=(msm_dri.so kgsl_dri.so swrast_dri.so kms_swrast_dri.so libdril_dri.so)
+want=(build/albw)
+for l in "${DLOPEN[@]}"; do [[ -e /usr/lib/$l ]] && want+=("/usr/lib/$l"); done
+for d in "${DRI[@]}"; do [[ -e /usr/lib/dri/$d ]] && cp -L "/usr/lib/dri/$d" "$OUT/lib/dri/" && want+=("/usr/lib/dri/$d"); done
+# GBM's backend (the tests' panel buffers, ALBW_DRM_LEASE_TEST)
+mkdir -p "$OUT/lib/gbm"
+for g in /usr/lib/gbm/*.so; do [[ -e $g ]] && cp -L "$g" "$OUT/lib/gbm/" && want+=("$g"); done
+# every library those need, the C library and loader included (the target has none of its own)
+ldd "${want[@]}" 2>/dev/null | awk '/=> \//{print $3} /^\s*\/.*ld-linux/{print $1}' | sort -u | while read -r so; do
+    cp -L "$so" "$OUT/lib/"
+done
+for l in "${DLOPEN[@]}"; do [[ -e /usr/lib/$l ]] && cp -L "/usr/lib/$l" "$OUT/lib/"; done
+cp /usr/share/glvnd/egl_vendor.d/50_mesa.json "$OUT/share/glvnd/egl_vendor.d/"
+[[ -e "$OUT/lib/ld-linux-armhf.so.3" ]] || { echo "the dynamic loader was not found"; exit 1; }
+cat > "$OUT/albw.sh" <<'EOF'
+#!/usr/bin/env bash
+# Starts the 32-bit ARM build with its own libraries (tools/make_armhf_bundle.sh).
+# Armada (github.com/armada-os/armada) on the AYN Thor: its device profile names the bottom panel's
+# connector and touchscreen. In Game Mode gamescope shows only the top panel and leases the bottom
+# one to a program that asks (gamescope-primary): ALBW_DRM_LEASE puts the bottom screen there,
+# ALBW_TOUCH_DEVICE reads its touchscreen. (As cerroverb/gba-ds's dist/launch.sh, 4095a40.)
+D=$(dirname "$(readlink -f "$0")")
+# the game file: --rom PATH, ALBW_ROM or the remembered path, as packaging/appimage/AppRun does
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}/albw-port"
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --rom) ALBW_ROM="$2"; shift 2 ;;
+        --rom=*) ALBW_ROM="${1#--rom=}"; shift ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+: "${ALBW_ROM:=$(cat "$CFG/rom_path" 2>/dev/null)}"
+if [ ! -f "${ALBW_ROM:-}" ]; then
+    echo "No game file. Run with --rom /path/to/your/decrypted.3ds (EU release), or set ALBW_ROM." >&2
+    exit 1
+fi
+mkdir -p "$CFG" && printf '%s\n' "$(readlink -f "$ALBW_ROM")" > "$CFG/rom_path"
+export ALBW_ROM
+# gamescope (Game Mode): Steam's overlay library is preloaded into shortcuts (a 64-bit library: the
+# loader only warns, but the AppImage drops it too) and games run on its Xwayland
+if [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ]; then
+    unset LD_PRELOAD
+    [ -n "${DISPLAY:-}" ] && [ -z "${SDL_VIDEO_DRIVER:-}" ] && export SDL_VIDEO_DRIVER=x11
+fi
+if [ -x /usr/libexec/armada/device-env ]; then
+    eval "$(/usr/libexec/armada/device-env 2>/dev/null | grep -E '^ARMADA_SECONDARY_(CONNECTOR|TOUCHSCREEN)=')"
+    for e in /sys/class/input/event*; do
+        [ -n "${ARMADA_SECONDARY_TOUCHSCREEN:-}" ] && [ "$(cat "$e/device/name" 2>/dev/null)" = "$ARMADA_SECONDARY_TOUCHSCREEN" ] &&
+            export ALBW_TOUCH_DEVICE="${ALBW_TOUCH_DEVICE-/dev/input/${e##*/}}" && break
+    done
+    if [ -n "${ARMADA_SECONDARY_CONNECTOR:-}" ] && [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ] &&
+       [ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gamescope-primary" ]; then
+        export ALBW_DRM_LEASE="${ALBW_DRM_LEASE-$ARMADA_SECONDARY_CONNECTOR}" GAMESCOPE_WAYLAND_DISPLAY=gamescope-primary
+    fi
+    echo "Armada: bottom panel ${ARMADA_SECONDARY_CONNECTOR:-none}, touchscreen ${ALBW_TOUCH_DEVICE:-not found}, lease ${ALBW_DRM_LEASE:-no (not Game Mode)}" >&2
+fi
+export LD_LIBRARY_PATH="$D/lib" LIBGL_DRIVERS_PATH="$D/lib/dri" GBM_BACKENDS_PATH="$D/lib/gbm" __EGL_VENDOR_LIBRARY_DIRS="$D/share/glvnd/egl_vendor.d"
+export ALBW_EXE="$D/albw"
+exec "$D/lib/ld-linux-armhf.so.3" "$D/albw" "${ARGS[@]}"
+EOF
+chmod +x "$OUT/albw.sh"
+tar -C "$(dirname "$OUT")" -czf "$OUT.tar.gz" "$(basename "$OUT")"
+echo "bundle: $OUT ($(du -sh "$OUT" | cut -f1)), $OUT.tar.gz"
