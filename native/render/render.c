@@ -1748,7 +1748,10 @@ static void upload_uniforms(Program *p) {
     }
     if (SH_CHANGED(sh_at, at)) { rglUniform4iv(p->alpha, 1, at); memcpy(S->sh_at, at, sizeof at); }
     if (p->fog >= 0) {
-        int on = R.fog.mode == 5 && !(&g_dbg_fog_off && g_dbg_fog_off) && fog_bind();   /* Esc menu Debug > Fog */
+        /* layout panes (HUD hearts, pause menu: RectDrawer) and blits are never fogged: their draws sit at the near depth, where the
+           fog factor is 0, and the fog state of the last 3D draw (Swamp Palace: mint green) washed the whole HUD / pause screen */
+        int ui = R.prog_id == RPROG_FONT_RECT || R.prog_id == RPROG_CLIP;
+        int on = R.fog.mode == 5 && !ui && !(&g_dbg_fog_off && g_dbg_fog_off) && fog_bind();   /* Esc menu Debug > Fog */
         GLint fg[2] = {on ? 5 : 0, R.fog.flip};
         if (SH_CHANGED(sh_fog, fg)) { rglUniform2i(p->fog, fg[0], fg[1]); memcpy(S->sh_fog, fg, sizeof fg); }
         if (on && SH_CHANGED(sh_fogc, R.fog.rgb)) { rglUniform3f(p->fog_color, R.fog.rgb[0], R.fog.rgb[1], R.fog.rgb[2]); memcpy(S->sh_fogc, R.fog.rgb, sizeof S->sh_fogc); }
@@ -1902,6 +1905,7 @@ static void dump_draw_after(const uint8_t *before, const char *kind, uint32_t co
          f->depth_write, f->stencil_test, f->alpha_test, f->alpha_func, f->alpha_ref, f->cull, R.tex_enable,
          f->eq_rgb, f->eq_a, f->logic_enable, f->logic_op,
          changed, lit);
+    rlog("dump:     fog mode %d flip %d rgb %.2f %.2f %.2f key %#x", R.fog.mode, R.fog.flip, R.fog.rgb[0], R.fog.rgb[1], R.fog.rgb[2], R.fog.key);
     for (int i = 0; i < 6; i++) {
         const RTevStage *t = &R.tev.stage[i];
         rlog("dump:     tev%d rgb src %u/%u/%u op %u/%u/%u cmb %u x%u | a src %u/%u/%u op %u/%u/%u cmb %u x%u | k %u %u %u %u",
@@ -2369,6 +2373,12 @@ void render_exec_op(const ROp *op) {
         break;
     case ROP_FL: fraglight_exec(op); break;
     case ROP_FOG:
+        {   /* debug: ALBW_FOG_TRACE=1: every fog state change (frame, mode, colour, LUT key) */
+            static int ft = -1;
+            if (ft < 0) ft = getenv("ALBW_FOG_TRACE") != NULL;
+            if (ft) fprintf(stderr, "fog-op: frame %ld mode %d flip %d rgb %d %d %d key %#x (was mode %d key %#x)\n", (long)R.frame, op->u.fog.mode,
+                            op->u.fog.flip, op->u.fog.rgb[0], op->u.fog.rgb[1], op->u.fog.rgb[2], (unsigned)op->u.fog.key, R.fog.mode, (unsigned)R.fog.key);
+        }
         R.fog.mode = op->u.fog.mode;
         R.fog.flip = op->u.fog.flip;
         for (int c = 0; c < 3; c++) R.fog.rgb[c] = op->u.fog.rgb[c] / 255.f;

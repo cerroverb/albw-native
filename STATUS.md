@@ -122,6 +122,7 @@ title and intro not looked at yet.
 | 10 | Winning the Yuga fight and the scenes after it (video ref. from 9:00) | a state late in the fight |
 | 12 | Slot 4 event close-up shows a magnified quarter view | a state right before the close-up |
 | – | The sage's large pink aura (boss cutscene) is faint | – |
+| – | Swamp Palace: fog (mint green) is missing until the first sword swing | what turns the fog object's enable flag (+0x2CC) on (BOOT_LOG 163) |
 | – | Fire / Tornado Rod cones and rings: drawn since v0.2.14 (mesh arrays bound; Fire Rod and the Yuga intro checked against the old build, Tornado Rod not seen yet); `ALBW_EFT_PRIM_SKIP=1` skips them as before. The Fire Rod ball is still dark olive instead of orange | a Tornado Rod save |
 | – | Windows: speed on real hardware unknown | a Windows tester |
 | – | Most dungeons after the Eastern Palace untested | play-testing |

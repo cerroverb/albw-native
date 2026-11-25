@@ -144,8 +144,16 @@ int32_t func_003F8250(uint32_t sys, uint32_t a, uint32_t b, uint32_t c) {
  * translated in place like the eft blocks (fog op + LUT, render.c FOG). */
 uint64_t func_0026EB74__decomp(uint32_t fog, uint32_t p);
 uint64_t func_0026EB74(uint32_t fog, uint32_t p) {
+    uint8_t dirty = *(volatile uint8_t *)(uintptr_t)(fog + 0x524);
     uint64_t r = func_0026EB74__decomp(fog, p);
     uint32_t end = (uint32_t)r;
+    {   /* debug: ALBW_FOG_TRACE=1: every call of the scene fog writer (frame, enable flag, dirty flag before, words written) */
+        static int ft = -1;
+        extern long g_plat_frames __attribute__((weak));
+        if (ft < 0) ft = getenv("ALBW_FOG_TRACE") != NULL;
+        if (ft) fprintf(stderr, "fog-writer: frame %ld fog %#x enable %d zflip %d dirty %d range %#x..%#x\n", &g_plat_frames ? g_plat_frames : 0L, fog,
+                        *(volatile uint8_t *)(uintptr_t)(fog + 0x2CC), *(volatile uint8_t *)(uintptr_t)(fog + 0x2CD), dirty, p, end);
+    }
     if (p && end > p && end - p < 0x1000) h3d_translate_live(p, end);
     return r;
 }
