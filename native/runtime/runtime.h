@@ -9,6 +9,11 @@ void runtime_install_crash_handler(void);
 void prof_init(void);    /* ALBW_PROFILE=<file>: sampling CPU profiler (prof.c) */
 void prof_frame(void);   /* once per presented frame: periodic dump */
 
+/* this program's file: ALBW_EXE when a launcher starts it through a bundled dynamic loader
+ * (/proc/self/exe is then the loader: the armhf bundle, tools/make_armhf_bundle.sh), else
+ * /proc/self/exe's target. "" if unknown. (entry.c) */
+const char *albw_exe_path(void);
+
 /* thread-local SDK block (see intrinsics.c) */
 uintptr_t albw_tls(void);
 void albw_tls_set(void *block);   /* a game thread's fixed TLS block (sdk/os.c, pmem slot data) */
@@ -24,7 +29,11 @@ int albw_run_on_low_stack(int (*fn)(void *), void *arg, size_t stack_size);
 
 /* save states (savestate.c, ss_ctx.c; native/SAVESTATES.md) */
 #include <stdint.h>
+#if defined(__arm__)
+typedef struct { uintptr_t r[26]; } AlbwCtx;   /* r4-r11, sp, lr, d8-d15 (runtime/ss_ctx.c) */
+#else
 typedef struct { uintptr_t r[8]; } AlbwCtx;   /* callee-saved registers, sp, return address */
+#endif
 __attribute__((returns_twice)) int albw_ctx_save(AlbwCtx *c);
 __attribute__((noreturn)) void albw_ctx_jump(const AlbwCtx *c, int v);
 __attribute__((noreturn)) void albw_ctx_run_on(void *stack_top, void (*fn)(void *), void *arg);

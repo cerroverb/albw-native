@@ -7,12 +7,23 @@ B=build
 # float model = the 3DS VFP: IEEE single precision in SSE registers (no x87 excess precision),
 # no FMA contraction (VFPv2 vmla rounds the product), see native/gameplay/AUDIT.md
 FPFLAGS=(-msse2 -mfpmath=sse -ffp-contract=off)
-CFLAGS=(-m32 -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing "${FPFLAGS[@]}")
+# ALBW_ARCH=armhf: 32-bit ARM Linux, run on a 32-bit ARM system or container (ARMv8 in AArch32: the
+# VFP is the float model itself, char stays signed as on i386). Decomp objects from
+# build_decomp.py --arch armhf (build/decomp-armhf).
+ARCH=${ALBW_ARCH:-x86}
+MFLAGS=(-m32) DEC=$B/decomp ASFLAGS=(--target=i686-linux-gnu) LDEMU=elf_i386
+if [[ $ARCH == armhf ]]; then
+    FPFLAGS=(-march=armv8-a -mfpu=neon-fp-armv8 -mfloat-abi=hard -fsigned-char -ffp-contract=off)
+    MFLAGS=() DEC=$B/decomp-armhf ASFLAGS=(-march=armv8-a -mfpu=neon-fp-armv8 -mfloat-abi=hard) LDEMU=armelf_linux_eabi
+fi
+export ALBW_ARCH=$ARCH
+CFLAGS=("${MFLAGS[@]}" -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -fno-strict-aliasing "${FPFLAGS[@]}")
 # ALBW_SANITIZE=1: AddressSanitizer + UndefinedBehaviorSanitizer on the native layer (platform,
 # runtime, SDK replacements, native game functions) -> build/albw-san, objects in build/nobj-san;
 # the decompiled objects stay uninstrumented (ASan still checks their malloc / memcpy / memset
 # calls). The normal build/albw is untouched.
 NOBJ=$B/nobj OUT=$B/albw LDSAN=()
+[[ $ARCH == armhf ]] && NOBJ=$B/nobj-armhf
 # ALBW_LINK_OUT=<path>: link a debug / experimental binary there instead of build/albw (the binary the
 # player runs: relinking it mid-session means save states taken meanwhile come from a build that
 # later disappears; its <path>.ssmap is written next to it)
@@ -44,7 +55,7 @@ CODE_BIN=${ALBW_CODE_BIN:-build/rom/eu_code.bin}; [[ -f $CODE_BIN ]] || CODE_BIN
 mkdir -p $B/native
 # round 3 stage 1 builds lack FCONV (float<->int Ghidra copies as bit copies): rebuild the affected
 # objects with it in place, once per decomp build, until the stage-2 rebuild (tools/fconv_interim.py)
-if [[ "${ALBW_FCONV_INTERIM:-1}" == 1 && ( ! -f $B/fconv_interim.stamp || $B/decomp/report.json -nt $B/fconv_interim.stamp ) ]]; then
+if [[ $ARCH == x86 && "${ALBW_FCONV_INTERIM:-1}" == 1 && ( ! -f $B/fconv_interim.stamp || $B/decomp/report.json -nt $B/fconv_interim.stamp ) ]]; then
     python3 tools/fconv_interim.py | tail -1
 fi
 NATIVE=()
@@ -53,7 +64,7 @@ for f in native/platform/platform.c native/runtime/*.c native/audio/mixer.c nati
     o=$NOBJ/${f%.c}.o
     mkdir -p "$(dirname "$o")"
     EXTRA=()
-    [[ "$f" == native/game/* || "$f" == native/robust/* || "$f" == native/gameplay/* || "$f" == native/compilefix/* || "$f" == native/framework/* || "$f" == native/core/* || "$f" == native/hot/* || "$f" == native/route/* ]] && EXTRA=(-DALBW_LINK_GAME_003E6AA8 -DALBW_V4 -Inative/route -Inative/robust -Inative/gameplay -Inative/compilefix -Inative/framework -Inative/core -Inative/hot -include native/albw_native.h -I$B/decomp/shared/include -I../albw-decomp-ai/shared/include -w -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types -Wno-error=return-type)  # decompiled code only
+    [[ "$f" == native/game/* || "$f" == native/robust/* || "$f" == native/gameplay/* || "$f" == native/compilefix/* || "$f" == native/framework/* || "$f" == native/core/* || "$f" == native/hot/* || "$f" == native/route/* ]] && EXTRA=(-DALBW_LINK_GAME_003E6AA8 -DALBW_V4 -Inative/route -Inative/robust -Inative/gameplay -Inative/compilefix -Inative/framework -Inative/core -Inative/hot -include native/albw_native.h -I$DEC/shared/include -I../albw-decomp-ai/shared/include -w -Wno-error=implicit-function-declaration -Wno-error=int-conversion -Wno-error=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types -Wno-error=return-type)  # decompiled code only
     # sound: the real nn::snd layer (native/sdk/snd.c + native/audio) by default; with
     # ALBW_REAL_SND=0 the silent stopgap in snd_silent.c instead (its dsp:: part is always used)
     if [[ "${ALBW_REAL_SND:-1}" == 0 && ( "$f" == native/sdk/snd.c || "$f" == native/audio/* ) ]]; then continue; fi
@@ -76,28 +87,30 @@ llvm-nm -u --format=just-symbols "${NATIVE[@]}" | sort -u > $B/native_syms.txt
 # game globals that a decomp object defines itself (C++ inline/static-init variables, weak 'V'):
 # the generated data must define them too, or the object's copy and the literal-pool references
 # (relocated into the generated data) are two different variables (data_00708A50, a singleton)
-python3 -c "import json;print('\n'.join(json.load(open('$B/decomp/report.json'))['objects']))" > $B/objs_pre.txt
+python3 -c "import json;print('\n'.join(json.load(open('$DEC/report.json'))['objects']))" > $B/objs_pre.txt
 llvm-nm -A --defined-only @$B/objs_pre.txt 2>/dev/null | awk '$3 ~ /^[VvWw]$/ && $4 ~ /^data_[0-9A-F]{8}$/ {print $4}' \
     | sort -u >> $B/native_syms.txt
 # (+ decomp/addr_taken.txt: the list the snapshot's build used. A fresh clone has no Ghidra dump and
 # missed 18 entries, e.g. the strings "In" / "Out" of 00254EFC: data placed differently, crash at boot)
-{ grep -rhoE "&DAT_00[1-6][0-9a-f]{5}\b" $B/decomp/ghidra_fallback $B/decomp/src native/game native/robust \
+{ grep -rhoE "&DAT_00[1-6][0-9a-f]{5}\b" $DEC/ghidra_fallback $DEC/src native/game native/robust \
       native/gameplay native/sdk native/compilefix native/hot native/framework native/core native/route 2>/dev/null \
       | sed 's/^&//'; [[ -f decomp/addr_taken.txt ]] && cat decomp/addr_taken.txt; } | sort -u > $B/addr_taken_pool.txt
-python3 tools/gen_data.py --addr-taken $B/addr_taken_pool.txt --code "$CODE_BIN" \
+python3 tools/gen_data.py --addr-taken $B/addr_taken_pool.txt --code "$CODE_BIN" --report $DEC/report.json \
     --map "$DECOMP_MAP" --extra $B/native_syms.txt >/dev/null
-clang --target=i686-linux-gnu -c $B/data/gamedata.s -o $B/data/gamedata.o
+clang "${ASFLAGS[@]}" -c $B/data/gamedata.s -o $B/data/gamedata.o
 # exactly the objects of the current source selection (stale ones from older selections excluded)
-python3 -c "import json;print('\n'.join(json.load(open('$B/decomp/report.json'))['objects']))" > $B/objs.txt
+python3 -c "import json;print('\n'.join(json.load(open('$DEC/report.json'))['objects']))" > $B/objs.txt
 echo $B/data/gamedata.o >> $B/objs.txt
-ld.lld -m elf_i386 -r -o $B/albw_game.o @$B/objs.txt
+ld.lld -m $LDEMU -r -o $B/albw_game.o @$B/objs.txt
 # bool results come back in %al only: zero-extending adapters for the decomp's bool functions
-# (tools/boolret.py), the converted callers read the whole register
-llvm-nm --defined-only --format=just-symbols "${NATIVE[@]}" | sort -u > $B/native_defs.txt
-python3 tools/boolret.py $B/albw_game.o $B/objs.txt $B/objs_bool.txt $B/boolret.s $B/native_defs.txt
-ld.lld -m elf_i386 -r -o $B/albw_game.o @$B/objs_bool.txt
-clang --target=i686-linux-gnu -c $B/boolret.s -o $B/native/boolret.o
-NATIVE+=($B/native/boolret.o)
+# (tools/boolret.py), the converted callers read the whole register (ARM: the callee extends, r0 = 0/1)
+if [[ $ARCH == x86 ]]; then
+    llvm-nm --defined-only --format=just-symbols "${NATIVE[@]}" | sort -u > $B/native_defs.txt
+    python3 tools/boolret.py $B/albw_game.o $B/objs.txt $B/objs_bool.txt $B/boolret.s $B/native_defs.txt
+    ld.lld -m elf_i386 -r -o $B/albw_game.o @$B/objs_bool.txt
+    clang --target=i686-linux-gnu -c $B/boolret.s -o $B/native/boolret.o
+    NATIVE+=($B/native/boolret.o)
+fi
 # names the decomp calls by C++/ad-hoc names -> the function they are (tools/resolve_names.py +
 # hand-verified ones)
 cat native/symbol_aliases.txt native/symbol_aliases_manual.txt 2>/dev/null | grep -v '^#' | grep . > $B/aliases.txt || true
@@ -130,18 +143,26 @@ llvm-nm --defined-only --format=just-symbols "${NATIVE[@]}" | sort -u > $B/nativ
 llvm-nm --defined-only --format=just-symbols $B/albw_game.o | grep '__impl$' | sort -u | python3 -c "
 import sys
 native = set(open('$B/native_defs.txt').read().split())
-out = ['.text']
+arm = '$ARCH' == 'armhf'
+out = ['.text'] + (['.arm'] if arm else [])
 for impl in sys.stdin.read().split():
     f = impl[:-len('__impl')]
     if f in native: continue
+    if arm:   # AAPCS: r0-r3 pass through, 16 stack argument words copied below a saved r4 (= r0), lr
+        out += ['.globl %s' % f, '.type %s,%%function' % f, '.p2align 4', '%s:' % f,
+                '  push {r4, lr}', '  mov r4, r0', '  sub sp, sp, #64']
+        for i in range(16):
+            out += ['  ldr ip, [sp, #%d]' % (72 + 4 * i), '  str ip, [sp, #%d]' % (4 * i)]
+        out += ['  bl %s' % impl, '  add sp, sp, #64', '  mov r0, r4', '  pop {r4, pc}']
+        continue
     out += ['.globl %s' % f, '.type %s,@function' % f, '.p2align 4', '%s:' % f,
             '  push %ebx', '  push %esi', '  push %edi', '  mov 16(%esp), %ebx', '  sub \$64, %esp',
             '  lea 80(%esp), %esi', '  mov %esp, %edi', '  mov \$16, %ecx', '  cld', '  rep movsl',
             '  call %s' % impl, '  add \$64, %esp', '  mov %ebx, %eax', '  pop %edi', '  pop %esi',
             '  pop %ebx', '  ret']
 print('\\n'.join(out))
-print('.section .note.GNU-stack,\\\"\\\",@progbits')" > $B/thunks.s
-clang --target=i686-linux-gnu -c $B/thunks.s -o $B/native/thunks.o
+print('.section .note.GNU-stack,\\\"\\\",%progbits')" > $B/thunks.s
+clang "${ASFLAGS[@]}" -c $B/thunks.s -o $B/native/thunks.o
 NATIVE+=($B/native/thunks.o)
 python3 tools/gen_stubs.py $B/albw_game.o "${NATIVE[@]}" > $B/stubs.c
 # a port helper macro (ALBW_*) that a file used without its definition became a call: never stub it
@@ -158,11 +179,11 @@ NAMES=($(python3 tools/gen_names.py native/names.txt $B/defined_syms.txt))
 [[ "${ALBW_SANITIZE:-0}" == 1 ]] || \
 NAMES+=(-Wl,--section-start=.albw_ro=0x30000000 -Wl,--section-start=.albw_rw=0x30100000
         -Wl,--section-start=.albw_zi=0x30200000)
-clang -m32 -no-pie "${LDSAN[@]}" -o $OUT "${NATIVE[@]}" $B/native/stubs.o $B/albw_game.o $SDL -lm -lz -rdynamic "${NAMES[@]}" -Wl,-Map=$OUT.map
+clang "${MFLAGS[@]}" -no-pie "${LDSAN[@]}" -o $OUT "${NATIVE[@]}" $B/native/stubs.o $B/albw_game.o $SDL -lm -lz -rdynamic "${NAMES[@]}" -Wl,-Map=$OUT.map
 # i386 only: float results come back in x87 st(0); direct calls that ignore one (void/int
 # prototype of a float-returning function) would leak x87 slots until every float is NaN.
 # Relink with pop adapters and redirect those call sites (tools/x87check.py; ALBW_X87FIX=0: off)
-if [[ "${ALBW_X87FIX:-1}" != 0 ]]; then
+if [[ $ARCH == x86 && "${ALBW_X87FIX:-1}" != 0 ]]; then
     python3 tools/x87check.py --thunks $OUT > $B/x87pop.s 2>/dev/null
     clang --target=i686-linux-gnu -c $B/x87pop.s -o $B/native/x87pop.o
     clang -m32 -no-pie "${LDSAN[@]}" -o $OUT "${NATIVE[@]}" $B/native/stubs.o $B/albw_game.o $B/native/x87pop.o $SDL -lm -lz -rdynamic "${NAMES[@]}" -Wl,-Map=$OUT.map

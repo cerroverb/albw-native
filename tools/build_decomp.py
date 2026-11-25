@@ -32,6 +32,11 @@ from albw_jobs import albw_jobs  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "build", "decomp")
 TARGET = "i686-linux-gnu"
+# the float model per target = the 3DS VFP (native/gameplay/AUDIT.md): IEEE single precision (on i686
+# in SSE registers, no x87 excess precision, on ARM the VFP itself), no FMA contraction (vmla is
+# unfused). armhf: ARMv8 in AArch32 (the AYN Thor runs it), char stays signed as on i686, the build the port is tested with.
+FPFLAGS = ["-msse2", "-mfpmath=sse", "-ffp-contract=off"]
+ARM_FLAGS = ["-march=armv8-a", "-mfpu=neon-fp-armv8", "-mfloat-abi=hard", "-fsigned-char", "-ffp-contract=off"]
 ARCH64 = False  # --arch x86_64 (build/decomp64): low-4GB mode, see native/64BIT.md
 COMPAT = os.path.join(ROOT, "native", "albw_native.h")
 
@@ -770,9 +775,7 @@ def build_one(job):
     cmd = ["clang", "--target=" + TARGET, "-c", "-O1", "-g0", "-w", "-ffunction-sections",
            "-fdata-sections", "-fno-common", "-fno-strict-aliasing", "-fwrapv", "-fno-exceptions",
            "-ferror-limit=3", "-include", COMPAT,
-           # float model = the 3DS VFP (native/gameplay/AUDIT.md): single precision in SSE
-           # registers on i686 too (no x87 excess precision), no FMA contraction (vmla is unfused)
-           "-msse2", "-mfpmath=sse", "-ffp-contract=off",
+           *FPFLAGS,
            "-I", os.path.join(OUT, "shared", "include"), "-I", os.path.dirname(src)]
     if ARCH64:
         cmd += ["-fms-extensions", "-Wno-error=int-to-pointer-cast"]  # __ptr32 (ALBW_GP)
@@ -1025,10 +1028,14 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--snapshot", default="",
                     help="build from a source snapshot (tools/export_snapshot.py: decomp/), no Ghidra dump or decomp repo")
-    ap.add_argument("--arch", choices=("x86", "x86_64"), default="x86",
-                    help="x86 = 32-bit intermediate build; x86_64 = the release target (tracks 64-bit health)")
+    ap.add_argument("--arch", choices=("x86", "x86_64", "armhf"), default="x86",
+                    help="x86 = 32-bit intermediate build; x86_64 = the release target (tracks 64-bit health). "
+                         "armhf = 32-bit ARM Linux (build/decomp-armhf)")
     a = ap.parse_args()
-    global OUT, TARGET, CTORS, ARCH64
+    global OUT, TARGET, CTORS, ARCH64, FPFLAGS
+    if a.arch == "armhf":
+        OUT, TARGET, FPFLAGS = os.path.join(ROOT, "build", "decomp-armhf"), "armv7a-linux-gnueabihf", ARM_FLAGS
+        os.environ["ALBW_ARCH"] = "armhf"
     if a.arch == "x86_64":
         OUT, TARGET, ARCH64 = os.path.join(ROOT, "build", "decomp64"), "x86_64-linux-gnu", True
         os.environ["ALBW_ARCH"] = "x86_64"  # gen_stubs.system_symbols(): 64-bit libraries

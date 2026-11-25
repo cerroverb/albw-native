@@ -44,22 +44,54 @@ __asm__(
     "  movq 48(%rdi), %rsp\n  jmp *56(%rdi)\n"
     ".globl albw_ctx_run_on\n.type albw_ctx_run_on,@function\nalbw_ctx_run_on:\n"
     "  movq %rdi, %rsp\n  andq $-16, %rsp\n  movq %rdx, %rdi\n  call *%rsi\n  ud2\n");
+#elif defined(__arm__)
+/* AAPCS: r4-r11, sp, lr and the VFP registers d8-d15 are callee-saved. r[0..7] = r4-r11, r[8] = sp,
+ * r[9] = lr (the return address), r[10..25] = d8-d15. */
+__asm__(
+    ".text\n.arm\n"
+    ".globl albw_ctx_save\n.type albw_ctx_save,%function\nalbw_ctx_save:\n"
+    "  stmia r0, {r4-r11}\n  str sp, [r0, #32]\n  str lr, [r0, #36]\n"
+    "  add r1, r0, #40\n  vstmia r1, {d8-d15}\n"
+    "  mov r0, #0\n  bx lr\n"
+    ".globl albw_ctx_jump\n.type albw_ctx_jump,%function\nalbw_ctx_jump:\n"
+    "  add r2, r0, #40\n  vldmia r2, {d8-d15}\n"
+    "  ldmia r0, {r4-r11}\n  ldr sp, [r0, #32]\n  ldr lr, [r0, #36]\n"
+    "  mov r0, r1\n  bx lr\n"
+    ".globl albw_ctx_run_on\n.type albw_ctx_run_on,%function\nalbw_ctx_run_on:\n"
+    "  bic r0, r0, #15\n  mov sp, r0\n  mov r0, r2\n  blx r1\n  udf #0\n");
 #else
-#error "save-state contexts: i386 / x86-64 only"
+#error "save-state contexts: i386 / x86-64 / ARM only"
 #endif
-__asm__(".section .note.GNU-stack,\"\",@progbits\n.text\n");
+__asm__(".section .note.GNU-stack,\"\",%progbits\n.text\n");
 
 uintptr_t albw_ctx_sp(const AlbwCtx *c) {
 #if defined(__i386__)
     return c->r[4];
+#elif defined(__arm__)
+    return c->r[8];
 #else
     return c->r[6];
 #endif
 }
 
-/* the stack-protector canary of the calling thread (TCB: i386 %gs:0x14, x86-64 %fs:0x28). Every run
+/* the stack-protector canary of the calling thread (TCB: i386 %gs:0x14, x86-64 %fs:0x28. ARM glibc:
+ * one process-wide __stack_chk_guard in ld.so's read-only-after-relocation data). Every run
  * picks a random one; frames restored from a state carry the saving run's, so a loading thread takes
  * the saved value (threads created later copy it from their creator). */
+#if defined(__arm__)
+#include <sys/mman.h>
+#include <unistd.h>
+extern uintptr_t __stack_chk_guard;
+uintptr_t albw_canary_get(void) { return __stack_chk_guard; }
+void albw_canary_set(uintptr_t v) {
+    if (__stack_chk_guard == v) return;
+    uintptr_t page = (uintptr_t)&__stack_chk_guard & ~(uintptr_t)(sysconf(_SC_PAGESIZE) - 1);
+    if (mprotect((void *)page, (size_t)sysconf(_SC_PAGESIZE), PROT_READ | PROT_WRITE))
+        runtime_fatal("albw_canary_set: mprotect of the stack guard page failed");
+    __stack_chk_guard = v;
+    mprotect((void *)page, (size_t)sysconf(_SC_PAGESIZE), PROT_READ);
+}
+#else
 uintptr_t albw_canary_get(void) {
     uintptr_t v;
 #if defined(__i386__)
@@ -76,3 +108,4 @@ void albw_canary_set(uintptr_t v) {
     __asm__ volatile("movq %0, %%fs:0x28" : : "r"(v) : "memory");
 #endif
 }
+#endif
