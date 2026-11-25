@@ -5,6 +5,8 @@
  *  - explicit casts at pointer-type mismatches (identity on the ARM) [26]
  *  - explicit (T)(uintptr_t) casts at int<->pointer mismatches (identity on the 32-bit ARM) [156]
  *  - (float)<pointer> -> ALBW_AS_F32(pointer): 32-bit copy [1]
+ * Arguments restored (BOOT_LOG 166): the ARM passes r0 = the object, r1, r2 = a flag, s0, s1; the converted text
+ *    declared (void) and read them as uninitialised registers. EU 001F61C8..001F61FC and 0063C1A8..0063C1E4.
  * Confidence: high for the fixes (each class checked against the EU disassembly on sample sites);
  * the function body otherwise has the fidelity of the Ghidra output (bare `return;` exits of
  * functions retyped non-void return 0, as the converter does). */
@@ -118,7 +120,7 @@ extern int DAT_00642330;
 /* WARNING: Restarted to delay deadcode elimination for space: stack */
 /* WARNING: Unknown calling convention */
 
-float func_0063AEA8(void)
+float func_0063AEA8(float ***********arg_r0,int arg_r1,int arg_r2,float fparam_0,float fparam_1)
 
 {
   int *piVar1;
@@ -266,6 +268,11 @@ float func_0063AEA8(void)
   #define local_30 (*(float ************* *)(albw_frame + 0x1ec0))
   #define local_2c (*(int *)(albw_frame + 0x1ec4))
   #define local_28 (*(int *)(albw_frame + 0x1ec8))
+  in_r0 = arg_r0;
+  in_r1 = arg_r1;
+  in_r2 = arg_r2;
+  in_s0 = ALBW_AS_U32(fparam_0);
+  in_s1 = (float **********)CF_FBITS(fparam_1);
   lVar48 = (ulonglong)in_s0 << 0x20;
   uVar50 = ZEXT48(DAT_0063b234);
   ppppppppppppfVar5 = (float ************)DAT_0063b234;
@@ -954,7 +961,7 @@ float func_0063AEA8(void)
     *(undefined1 *)(local_30 + 0xf70) = 1;
     local_30[0x29] = (float ************)0x0;
     *local_1e20 = (float ***********)0x0;
-    fVar41 = func_0063AEA8();
+    fVar41 = func_0063AEA8(local_30,1,local_28,fparam_0,fparam_1);
     return fVar41;
   }
   if (local_28 == 0) {

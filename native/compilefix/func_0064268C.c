@@ -4,6 +4,9 @@
  *  - (T *)<float expr> -> (T *)CF_FBITS(expr): 32-bit copy of the float (vmov/vstr), never a conversion [76]
  *  - explicit casts at pointer-type mismatches (identity on the ARM) [26]
  *  - explicit (T)(uintptr_t) casts at int<->pointer mismatches (identity on the 32-bit ARM) [158]
+ * Arguments restored (BOOT_LOG 166): the ARM passes r0 = the object, r1 (1 on both calls), r2 = a flag, s0, s1; the
+ *    converted text declared (void) and read them as uninitialised registers (crash in the yard with clang 22).
+ *    EU 001EEA30..001EEA64 (caller 001EA96C) and 0064399C..006439D8 (the call to itself).
  * Confidence: high for the fixes (each class checked against the EU disassembly on sample sites);
  * the function body otherwise has the fidelity of the Ghidra output (bare `return;` exits of
  * functions retyped non-void return 0, as the converter does). */
@@ -115,7 +118,7 @@ extern int DAT_00649acc;
 /* WARNING: Restarted to delay deadcode elimination for space: stack */
 /* WARNING: Unknown calling convention */
 
-undefined4 func_0064268C(void)
+undefined4 func_0064268C(float ***********arg_r0,int arg_r1,int arg_r2,float fparam_0,float fparam_1)
 
 {
   int *piVar1;
@@ -264,6 +267,11 @@ undefined4 func_0064268C(void)
   #define local_28 (*(int *)(albw_frame + 0x1ec8))
   uVar50 = ZEXT48(DAT_00642a2c);
   pppppppppppfVar36 = (float ***********)DAT_00642a2c;
+  in_r0 = arg_r0;
+  in_r1 = arg_r1;
+  in_r2 = arg_r2;
+  in_s0 = (float ***********)CF_FBITS(fparam_0);
+  in_s1 = (float *********)CF_FBITS(fparam_1);
   local_30 = in_r0;
   local_2c = in_r1;
   local_28 = in_r2;
@@ -948,7 +956,7 @@ undefined4 func_0064268C(void)
     *(undefined1 *)(local_30 + 0xf70) = 0;
     local_30[0x29] = (float **********)0x0;
     *local_1df4 = (float **********)0x0;
-    return func_0064268C();
+    return func_0064268C(local_30,1,local_28,fparam_0,fparam_1);
   }
   if (local_28 == 0) {
     return 0;

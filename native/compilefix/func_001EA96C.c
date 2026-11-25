@@ -79,8 +79,8 @@ extern int func_004A17E4(float *param_1);
 extern int func_004AAD4C(int param_1,float *param_2,undefined4 *param_3,undefined4 param_4,uint param_5, uint param_6,float fparam_0,float fparam_1);
 extern int func_004AAF44(int param_1,float *param_2,undefined4 *param_3,uint param_4,uint param_5, float fparam_0);
 extern int func_00570D00(int param_1,int *param_2,int param_3,int param_4,int param_5,float fparam_0);
-extern float func_0063AEA8(float fparam_0,float fparam_1);
-extern int func_0064268C(float fparam_0,float fparam_1);
+extern float func_0063AEA8(float ***********arg_r0,int arg_r1,int arg_r2,float fparam_0,float fparam_1);
+extern int func_0064268C(float ***********arg_r0,int arg_r1,int arg_r2,float fparam_0,float fparam_1);
 extern int func_00649E18(int param_1,float *param_2,float *param_3);
 extern int func_0064B4A0(int param_1,float *param_2,float *param_3);
 extern int func_0064CB28(int *param_1,int *param_2,int *param_3);
@@ -3369,7 +3369,8 @@ LAB_001f5a48:
             pppppppppppfVar17[0x29] = (float **********)0x0;
             pppppppppppfVar17[0x77c] = (float **********)0x0;
             pppppppppppfVar34 =
-                 (float ***********)ALBW_PTR_BITS(func_0063AEA8(ALBW_AS_F32(pppppppppppfVar75),ALBW_AS_F32(uVar72)));
+                 (float ***********)ALBW_PTR_BITS(func_0063AEA8((float ***********)param_1,1,(int)(uintptr_t)local_1df8,
+                     param_2[0x15],param_2[0x14]));   /* EU 001F61C8..001F61FC: this branch's flag [sp,#0x138]; s0 = [0x15], s1 = [0x14] (BOOT_LOG 166) */
           }
         }
       }
@@ -4100,7 +4101,9 @@ LAB_001ee2c4:
         pppppppppppfVar9[0x29] = (float **********)0x0;
         pppppppppppfVar9[0x77c] = (float **********)0x0;
         pppppppppppfVar34 = pppppppppppfVar15;
-        func_0064268C(ALBW_AS_F32(pppppppppppfVar15),ALBW_AS_F32(pppppppppfVar48));
+        /* EU 001EEA30..001EEA64: r0 = param_1, r1 = 1, r2 = this branch's flag (param_2[0x1a] != 0, [sp,#0xe8]),
+         * s0 / s1 = param_2[0x14] / [0x15] (BOOT_LOG 166) */
+        func_0064268C((float ***********)param_1,1,(int)(uintptr_t)local_1e48,param_2[0x14],param_2[0x15]);
         pppppppppppfVar50 = pppppppppppfVar78;
         pppppppppppfVar17 = pppppppppppfVar9;
       }
